@@ -18,6 +18,7 @@ class PlayerWidget(QStackedWidget):
     error_occurred = Signal(str)
     warning_occurred = Signal(str)
     backend_changed = Signal(str)
+    paused_changed = Signal(bool)
 
     def __init__(self, audio_placeholder: QWidget, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -58,6 +59,18 @@ class PlayerWidget(QStackedWidget):
         self.qt_player.errorOccurred.connect(
             lambda _error, message: self.error_occurred.emit(message)
         )
+        self.qt_player.playbackStateChanged.connect(
+            lambda state: self._main_pause_changed(
+                state != QMediaPlayer.PlaybackState.PlayingState
+            )
+        )
+        self.ai_audio_output = QAudioOutput(self)
+        self.ai_player = QMediaPlayer(self)
+        self.ai_player.setAudioOutput(self.ai_audio_output)
+        self.ai_audio_output.setMuted(True)
+        self._source_audible = True
+        self._ai_audible = False
+        self._ai_monitor_path: Path | None = None
 
         self.mpv: MpvBackend | None = None
         self._using_mpv = False
@@ -89,6 +102,7 @@ class PlayerWidget(QStackedWidget):
         self.mpv.ready.connect(self._mpv_ready)
         self.mpv.failed.connect(self._mpv_failed)
         self.mpv.command_error.connect(self._mpv_command_error)
+        self.mpv.pause_changed.connect(self._main_pause_changed)
 
     @property
     def backend_name(self) -> str:
@@ -100,6 +114,7 @@ class PlayerWidget(QStackedWidget):
         if not self.mpv or not self._using_mpv:
             return
         self.mpv.set_gain(self._gain_db, self._gain_bypassed)
+        self.mpv.set_muted(not self._source_audible)
         self._render_subtitle()
         self.backend_changed.emit("mpv IPC")
 
@@ -123,10 +138,27 @@ class PlayerWidget(QStackedWidget):
 
     def _mpv_position_changed(self, milliseconds: int) -> None:
         self.position_changed.emit(milliseconds)
+        if (
+            self._ai_audible
+            and self._ai_monitor_path
+            and abs(self.ai_player.position() - milliseconds) > 80
+        ):
+            self.ai_player.setPosition(milliseconds)
         if self._range_end_ms is not None and milliseconds >= self._range_end_ms:
             if self.mpv:
                 self.mpv.set_paused(True)
             self._range_end_ms = None
+
+    def _main_pause_changed(self, paused: bool) -> None:
+        self.paused_changed.emit(paused)
+        if not self._ai_audible or not self._ai_monitor_path:
+            self.ai_player.pause()
+            return
+        if paused:
+            self.ai_player.pause()
+        else:
+            self.ai_player.setPosition(self.position)
+            self.ai_player.play()
 
     def load(self, path: Path, has_video: bool) -> None:
         if not path.exists():
@@ -211,18 +243,25 @@ class PlayerWidget(QStackedWidget):
             self.mpv.seek(milliseconds)
         else:
             self.qt_player.setPosition(milliseconds)
+        if self._ai_monitor_path:
+            self.ai_player.setPosition(milliseconds)
 
     def scrub(self, milliseconds: int) -> None:
         if self._using_mpv and self.mpv:
             self.mpv.scrub(milliseconds)
         else:
             self.qt_player.setPosition(milliseconds)
+        if self._ai_monitor_path:
+            self.ai_player.pause()
+            self.ai_player.setPosition(milliseconds)
 
     def finish_scrub(self, milliseconds: int) -> None:
         if self._using_mpv and self.mpv:
             self.mpv.finish_scrub(milliseconds)
         else:
             self.qt_player.setPosition(milliseconds)
+        if self._ai_monitor_path:
+            self.ai_player.setPosition(milliseconds)
 
     def set_scrub_hz(self, frequency: int) -> None:
         if self.mpv:
@@ -275,6 +314,42 @@ class PlayerWidget(QStackedWidget):
         linear = min(1.0, 10 ** (effective / 20))
         self.audio_output.setVolume(linear)
 
+    def load_ai_monitor(self, path: Path) -> None:
+        self._ai_monitor_path = path
+        self.ai_player.setSource(QUrl.fromLocalFile(str(path)))
+        self.ai_player.setPosition(self.position)
+        if self._ai_audible:
+            paused = self.mpv.paused if self._using_mpv and self.mpv else (
+                self.qt_player.playbackState()
+                != QMediaPlayer.PlaybackState.PlayingState
+            )
+            if not paused:
+                self.ai_player.play()
+
+    def clear_ai_monitor(self) -> None:
+        self._ai_monitor_path = None
+        self.ai_player.stop()
+        self.ai_player.setSource(QUrl())
+
+    def set_track_monitor(self, source_audible: bool, ai_audible: bool) -> None:
+        self._source_audible = source_audible
+        self._ai_audible = ai_audible
+        if self._using_mpv and self.mpv:
+            self.mpv.set_muted(not source_audible)
+        else:
+            self.audio_output.setMuted(not source_audible)
+        self.ai_audio_output.setMuted(not ai_audible)
+        if not ai_audible:
+            self.ai_player.pause()
+        elif self._ai_monitor_path:
+            self.ai_player.setPosition(self.position)
+            paused = self.mpv.paused if self._using_mpv and self.mpv else (
+                self.qt_player.playbackState()
+                != QMediaPlayer.PlaybackState.PlayingState
+            )
+            if not paused:
+                self.ai_player.play()
+
     @property
     def position(self) -> int:
         if self._using_mpv and self.mpv:
@@ -285,6 +360,7 @@ class PlayerWidget(QStackedWidget):
         if self.mpv:
             self.mpv.shutdown()
         self.qt_player.stop()
+        self.ai_player.stop()
 
     def clear(self) -> None:
         self._range_end_ms = None
@@ -293,5 +369,6 @@ class PlayerWidget(QStackedWidget):
             self.mpv.stop()
         self.qt_player.stop()
         self.qt_player.setSource(QUrl())
+        self.clear_ai_monitor()
         self.set_subtitle_text("")
         self.setCurrentWidget(self.audio_placeholder)

@@ -7,6 +7,8 @@ from PySide6.QtGui import QUndoCommand
 
 from tts_dataset_studio.domain.models import (
     ExportRegion,
+    GeneratedAudioClip,
+    GeneratedAudioTrack,
     MediaAsset,
     SubtitleCue,
     SubtitleTrack,
@@ -117,6 +119,57 @@ class SubtitleTracksCommand(QUndoCommand):
 
     def _apply(self, tracks: list[SubtitleTrack]) -> None:
         self.asset.subtitle_tracks = copy.deepcopy(tracks)
+        self.refresh()
+
+    def undo(self) -> None:
+        self._apply(self.before)
+
+    def redo(self) -> None:
+        self._apply(self.after)
+
+
+class GeneratedClipsCommand(QUndoCommand):
+    def __init__(
+        self,
+        track: GeneratedAudioTrack,
+        before: list[GeneratedAudioClip],
+        after: list[GeneratedAudioClip],
+        refresh: Callable[[], None],
+        label: str = "更新 AI 生成音轨",
+    ) -> None:
+        super().__init__(label)
+        self.track = track
+        self.before = copy.deepcopy(before)
+        self.after = copy.deepcopy(after)
+        self.refresh = refresh
+
+    def _apply(self, clips: list[GeneratedAudioClip]) -> None:
+        self.track.clips = copy.deepcopy(clips)
+        self.refresh()
+
+    def undo(self) -> None:
+        self._apply(self.before)
+
+    def redo(self) -> None:
+        self._apply(self.after)
+
+
+class GeneratedClipEditCommand(QUndoCommand):
+    def __init__(
+        self,
+        clip: GeneratedAudioClip,
+        before: tuple[int, int, int],
+        after: tuple[int, int, int],
+        refresh: Callable[[], None],
+    ) -> None:
+        super().__init__("调整 AI 音频片段")
+        self.clip = clip
+        self.before = before
+        self.after = after
+        self.refresh = refresh
+
+    def _apply(self, value: tuple[int, int, int]) -> None:
+        self.clip.start_ms, self.clip.source_offset_ms, self.clip.duration_ms = value
         self.refresh()
 
     def undo(self) -> None:

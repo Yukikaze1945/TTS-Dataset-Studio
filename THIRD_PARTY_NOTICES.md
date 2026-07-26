@@ -19,3 +19,10 @@ directories are collected during release packaging.
 
 Project maintainers should not replace these pinned runtime files without updating the manifest,
 checksums, notices, and corresponding-source references.
+
+## Optional external engines
+
+MOSS-Transcribe-Diarize and IndexTTS2 are optional user-installed components. Their Python
+environments, PyTorch/CUDA packages, source trees, and model weights are not copied into this
+repository or its release archives. Users are responsible for complying with the licenses and
+model terms of the external installations they configure.

@@ -53,6 +53,7 @@ uv run tts-dataset-studio
 | X | Delete selected export regions |
 | D / F | Previous/next video frame |
 | C | Save a clean source-video still |
+| G | Generate IndexTTS2 speech for the selected regions |
 | Ctrl+S | Save project |
 | Ctrl+Z / Ctrl+Shift+Z | Undo/redo |
 | Alt+Wheel | Zoom timeline |
@@ -66,6 +67,26 @@ MOSS, PyTorch, and model weights are not distributed with this project. Install
 1. Set `MOSS_TRANSCRIBE_DIARIZE_HOME`.
 2. Place it at `moss-asr\MOSS-Transcribe-Diarize` on any Windows drive.
 3. Select its directory, Python environment, and model under Advanced Settings → ASR.
+
+## Optional IndexTTS2 speech engine
+
+IndexTTS2, PyTorch, CUDA, and model weights are not distributed with the repository or portable
+build. The application discovers an external installation through `INDEX_TTS_HOME`, common
+`index-tts` locations on Windows drives, or the directory configured under Advanced Settings →
+Speech Engine. A typical installation contains `.venv\Scripts\python.exe`,
+`indextts\infer_v2.py`, and `checkpoints\config.yaml`.
+
+After loading the engine, select an export subtitle track and one or more regions, then press
+`G`. Each region's untreated source audio is used as its own reference. Results are inserted into
+the editable **AI Generated** track, which supports moving, non-destructive trimming, deletion,
+undo/redo, and Mute/Solo synchronized monitoring. Saved projects store generated WAV files under
+the matching `.ttds.assets/generated` directory.
+
+Run the optional local GPU smoke test with:
+
+```powershell
+.\scripts\index-tts-smoke.ps1 -IndexTtsRoot X:\index-tts
+```
 
 ## Development
 
@@ -82,6 +103,8 @@ uv run pytest
 - Windows 10/11 x64 only.
 - One source asset per timeline; no multi-clip editing, transitions, or final video export.
 - MOSS ASR requires a separately installed Python/CUDA/model environment.
+- IndexTTS2 requires a separately installed Python/CUDA/model environment; only the protocol
+  worker is included in portable builds.
 - Noise reduction, diarization pipelines, quality scoring, and framework-specific metadata are
   outside the V1 scope.
 

@@ -63,6 +63,7 @@ uv run tts-dataset-studio
 | X | 删除选中的导出区间 |
 | D / F | 上一帧/下一帧 |
 | C | 保存当前原视频静帧 |
+| G | 使用选中区间和导出字幕轨生成 IndexTTS2 语音 |
 | Ctrl+S | 保存工程 |
 | Ctrl+Z / Ctrl+Shift+Z | 撤销/重做 |
 | Alt+滚轮 | 缩放时间线 |
@@ -79,6 +80,32 @@ MOSS、PyTorch 和模型权重不包含在仓库或便携包中。准备好
 3. 在“文件 → 高级设置 → ASR”中手动选择目录、Python 和模型。
 
 加载模型后，选择一个或多个导出区间并点击“识别选中片段”。取消识别不会卸载模型。
+
+## IndexTTS2 语音引擎（可选）
+
+IndexTTS2、PyTorch、CUDA 和模型权重不会上传到仓库，也不会打进便携版。软件按以下顺序发现外部环境：
+
+1. 环境变量 `INDEX_TTS_HOME`。
+2. 用户目录或程序相邻目录下的 `index-tts`。
+3. Windows 固定磁盘根目录下的 `index-tts`。
+4. “文件 → 高级设置 → 语音引擎”中手动指定的目录。
+
+默认环境布局为：
+
+```text
+index-tts/
+├── .venv/Scripts/python.exe
+├── indextts/infer_v2.py
+└── checkpoints/config.yaml
+```
+
+加载语音引擎后，指定一个导出字幕轨并选择一个或多个区间，按 `G` 即可用每个区间的原始声音作为参考音频生成语音。生成结果会加入“AI 生成”音轨；该音轨支持移动、非破坏裁边、删除、撤销/重做以及 Mute/Solo 同步试听。工程保存后，生成文件位于同名 `.ttds.assets/generated` 目录。
+
+可执行本机 GPU 冒烟测试：
+
+```powershell
+.\scripts\index-tts-smoke.ps1 -IndexTtsRoot X:\index-tts
+```
 
 ## 开发与测试
 
@@ -100,6 +127,7 @@ uv run pytest
 - 首发仅支持 Windows 10/11 x64。
 - 单个时间线只打开一个源素材，不支持素材拼接、转场或视频成片导出。
 - MOSS ASR 依赖用户自己的 Python/CUDA/模型环境。
+- IndexTTS2 依赖用户自己的 Python/CUDA/模型环境；便携版只包含协议 worker。
 - V1 不包含降噪、说话人分离、质量评分和训练框架专用 metadata。
 
 ## 许可证

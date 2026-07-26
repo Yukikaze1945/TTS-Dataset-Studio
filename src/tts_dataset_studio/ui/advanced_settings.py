@@ -11,6 +11,7 @@ from PySide6.QtWidgets import (
     QComboBox,
     QDialog,
     QDialogButtonBox,
+    QDoubleSpinBox,
     QFileDialog,
     QFormLayout,
     QHBoxLayout,
@@ -19,6 +20,7 @@ from PySide6.QtWidgets import (
     QMessageBox,
     QPlainTextEdit,
     QPushButton,
+    QScrollArea,
     QSpinBox,
     QTabWidget,
     QVBoxLayout,
@@ -43,6 +45,7 @@ class AdvancedSettingsDialog(QDialog):
         tabs.addTab(self._build_save_tab(), "保存与命名")
         tabs.addTab(self._build_tools_tab(), "播放与工具")
         tabs.addTab(self._build_asr_tab(), "ASR")
+        tabs.addTab(self._build_index_tts_tab(), "语音引擎")
         layout.addWidget(tabs)
         buttons = QDialogButtonBox(
             QDialogButtonBox.StandardButton.Ok
@@ -156,6 +159,70 @@ class AdvancedSettingsDialog(QDialog):
         form.addRow("", test_button)
         return tab
 
+    def _build_index_tts_tab(self) -> QWidget:
+        tab = QWidget()
+        form = QFormLayout(tab)
+        self.index_root = QLineEdit()
+        self.index_python = QLineEdit()
+        self.index_config = QLineEdit()
+        self.index_model_dir = QLineEdit()
+        self.index_device = QComboBox()
+        self.index_device.addItems(["cuda:0", "auto", "cpu"])
+        self.index_fp16 = QCheckBox("使用 FP16")
+        self.index_cuda_kernel = QCheckBox("使用 CUDA kernel")
+        self.index_deepspeed = QCheckBox("使用 DeepSpeed")
+        self.index_accel = QCheckBox("使用 GPT 加速引擎")
+        self.index_torch_compile = QCheckBox("使用 torch.compile")
+        self.index_temperature = QDoubleSpinBox()
+        self.index_temperature.setRange(0.1, 2.0)
+        self.index_temperature.setSingleStep(0.1)
+        self.index_top_p = QDoubleSpinBox()
+        self.index_top_p.setRange(0.0, 1.0)
+        self.index_top_p.setSingleStep(0.05)
+        self.index_top_k = QSpinBox()
+        self.index_top_k.setRange(0, 100)
+        self.index_beams = QSpinBox()
+        self.index_beams.setRange(1, 10)
+        self.index_repetition = QDoubleSpinBox()
+        self.index_repetition.setRange(0.1, 20.0)
+        self.index_repetition.setSingleStep(0.1)
+        self.index_max_mel = QSpinBox()
+        self.index_max_mel.setRange(50, 5000)
+        self.index_max_text = QSpinBox()
+        self.index_max_text.setRange(20, 1000)
+        self.index_silence = QSpinBox()
+        self.index_silence.setRange(0, 5000)
+        self.index_silence.setSuffix(" ms")
+        self.index_temp = QLineEdit()
+        self.index_unload_on_exit = QCheckBox("退出程序时卸载语音引擎")
+        test_button = QPushButton("检测 IndexTTS2 环境")
+        test_button.clicked.connect(self._test_index_tts_environment)
+        form.addRow("IndexTTS 安装目录", self._path_row(self.index_root))
+        form.addRow("Python", self.index_python)
+        form.addRow("配置文件", self.index_config)
+        form.addRow("权重目录", self._path_row(self.index_model_dir))
+        form.addRow("设备", self.index_device)
+        form.addRow("", self.index_fp16)
+        form.addRow("", self.index_cuda_kernel)
+        form.addRow("", self.index_deepspeed)
+        form.addRow("", self.index_accel)
+        form.addRow("", self.index_torch_compile)
+        form.addRow("Temperature", self.index_temperature)
+        form.addRow("Top P", self.index_top_p)
+        form.addRow("Top K", self.index_top_k)
+        form.addRow("Beams", self.index_beams)
+        form.addRow("重复惩罚", self.index_repetition)
+        form.addRow("最大 Mel Token", self.index_max_mel)
+        form.addRow("每段最大文本 Token", self.index_max_text)
+        form.addRow("段间静音", self.index_silence)
+        form.addRow("临时目录", self._path_row(self.index_temp))
+        form.addRow("", self.index_unload_on_exit)
+        form.addRow("", test_button)
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setWidget(tab)
+        return scroll
+
     def _choose_folder(self, edit: QLineEdit) -> None:
         folder = QFileDialog.getExistingDirectory(self, "选择目录", edit.text())
         if folder:
@@ -185,6 +252,26 @@ class AdvancedSettingsDialog(QDialog):
         self.moss_temp.setText(value.moss_temp_dir)
         self.track_name.setText(value.moss_track_name)
         self.unload_on_exit.setChecked(value.unload_asr_on_exit)
+        self.index_root.setText(value.index_tts_root)
+        self.index_python.setText(value.index_tts_python)
+        self.index_config.setText(value.index_tts_config)
+        self.index_model_dir.setText(value.index_tts_model_dir)
+        self.index_device.setCurrentText(value.index_tts_device)
+        self.index_fp16.setChecked(value.index_tts_fp16)
+        self.index_cuda_kernel.setChecked(value.index_tts_cuda_kernel)
+        self.index_deepspeed.setChecked(value.index_tts_deepspeed)
+        self.index_accel.setChecked(value.index_tts_accel)
+        self.index_torch_compile.setChecked(value.index_tts_torch_compile)
+        self.index_temperature.setValue(value.index_tts_temperature)
+        self.index_top_p.setValue(value.index_tts_top_p)
+        self.index_top_k.setValue(value.index_tts_top_k)
+        self.index_beams.setValue(value.index_tts_num_beams)
+        self.index_repetition.setValue(value.index_tts_repetition_penalty)
+        self.index_max_mel.setValue(value.index_tts_max_mel_tokens)
+        self.index_max_text.setValue(value.index_tts_max_text_tokens)
+        self.index_silence.setValue(value.index_tts_interval_silence)
+        self.index_temp.setText(value.index_tts_temp_dir)
+        self.index_unload_on_exit.setChecked(value.unload_index_tts_on_exit)
 
     def value(self) -> AppSettings:
         return replace(
@@ -212,6 +299,26 @@ class AdvancedSettingsDialog(QDialog):
             moss_temp_dir=self.moss_temp.text().strip(),
             moss_track_name=self.track_name.text().strip() or "MOSS ASR",
             unload_asr_on_exit=self.unload_on_exit.isChecked(),
+            index_tts_root=self.index_root.text().strip(),
+            index_tts_python=self.index_python.text().strip(),
+            index_tts_config=self.index_config.text().strip(),
+            index_tts_model_dir=self.index_model_dir.text().strip(),
+            index_tts_device=self.index_device.currentText(),
+            index_tts_fp16=self.index_fp16.isChecked(),
+            index_tts_cuda_kernel=self.index_cuda_kernel.isChecked(),
+            index_tts_deepspeed=self.index_deepspeed.isChecked(),
+            index_tts_accel=self.index_accel.isChecked(),
+            index_tts_torch_compile=self.index_torch_compile.isChecked(),
+            index_tts_temperature=self.index_temperature.value(),
+            index_tts_top_p=self.index_top_p.value(),
+            index_tts_top_k=self.index_top_k.value(),
+            index_tts_num_beams=self.index_beams.value(),
+            index_tts_repetition_penalty=self.index_repetition.value(),
+            index_tts_max_mel_tokens=self.index_max_mel.value(),
+            index_tts_max_text_tokens=self.index_max_text.value(),
+            index_tts_interval_silence=self.index_silence.value(),
+            index_tts_temp_dir=self.index_temp.text().strip(),
+            unload_index_tts_on_exit=self.index_unload_on_exit.isChecked(),
         )
 
     def _apply(self) -> None:
@@ -258,6 +365,52 @@ class AdvancedSettingsDialog(QDialog):
                 "环境检测成功",
                 f"Torch {info['torch']}\nCUDA: {info['cuda']}\n"
                 f"GPU: {info['gpu']}\n模型: {model_status}",
+            )
+        except Exception as exc:
+            QMessageBox.critical(self, "环境检测失败", str(exc))
+
+    def _test_index_tts_environment(self) -> None:
+        value = self.value()
+        python = Path(value.index_tts_python)
+        root = Path(value.index_tts_root)
+        config = Path(value.index_tts_config)
+        model_dir = Path(value.index_tts_model_dir)
+        missing = [
+            str(path)
+            for path in (python, root, config, model_dir)
+            if not path.exists()
+        ]
+        if missing:
+            QMessageBox.critical(
+                self,
+                "环境检测失败",
+                "以下路径不存在：\n" + "\n".join(missing),
+            )
+            return
+        code = (
+            "import json,torch,indextts;"
+            "print(json.dumps({'torch':torch.__version__,"
+            "'cuda':torch.cuda.is_available(),"
+            "'gpu':torch.cuda.get_device_name(0) if torch.cuda.is_available() "
+            "else 'CPU'}))"
+        )
+        try:
+            process = subprocess.run(
+                [str(python), "-c", code],
+                cwd=str(root),
+                capture_output=True,
+                text=True,
+                timeout=30,
+                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+                check=False,
+            )
+            if process.returncode:
+                raise RuntimeError(process.stderr.strip())
+            info = json.loads(process.stdout.strip().splitlines()[-1])
+            QMessageBox.information(
+                self,
+                "IndexTTS2 环境检测成功",
+                f"Torch {info['torch']}\nCUDA: {info['cuda']}\nGPU: {info['gpu']}",
             )
         except Exception as exc:
             QMessageBox.critical(self, "环境检测失败", str(exc))

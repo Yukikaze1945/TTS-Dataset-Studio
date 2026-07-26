@@ -239,6 +239,9 @@ class MpvBackend(QObject):
     def set_gain(self, gain_db: float, bypassed: bool) -> None:
         self.command(["set_property", "volume", gain_db_to_percent(gain_db, bypassed)])
 
+    def set_muted(self, muted: bool) -> None:
+        self.command(["set_property", "mute", muted])
+
     def show_text(self, text: str) -> None:
         self.command(["show-text", text, 86_400_000 if text else 1])
 

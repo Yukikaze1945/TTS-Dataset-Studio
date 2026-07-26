@@ -56,6 +56,46 @@ class ExportRegion:
 
 
 @dataclass(slots=True)
+class GeneratedAudioClip:
+    path: str
+    start_ms: int
+    source_offset_ms: int
+    duration_ms: int
+    source_duration_ms: int
+    reference_region_id: str
+    text: str
+    engine: str = "index-tts-v2"
+    generation_params: dict[str, Any] = field(default_factory=dict)
+    id: str = field(default_factory=new_id)
+
+    def __post_init__(self) -> None:
+        self.start_ms = max(0, int(self.start_ms))
+        self.source_duration_ms = max(1, int(self.source_duration_ms))
+        self.source_offset_ms = max(
+            0,
+            min(int(self.source_offset_ms), self.source_duration_ms - 1),
+        )
+        self.duration_ms = max(
+            1,
+            min(int(self.duration_ms), self.source_duration_ms - self.source_offset_ms),
+        )
+        self.text = self.text.strip()
+
+    @property
+    def end_ms(self) -> int:
+        return self.start_ms + self.duration_ms
+
+
+@dataclass(slots=True)
+class GeneratedAudioTrack:
+    name: str = "AI 生成"
+    clips: list[GeneratedAudioClip] = field(default_factory=list)
+    muted: bool = True
+    solo: bool = False
+    id: str = field(default_factory=new_id)
+
+
+@dataclass(slots=True)
 class MediaAsset:
     path: str
     display_name: str
@@ -71,6 +111,11 @@ class MediaAsset:
     subtitle_tracks: list[SubtitleTrack] = field(default_factory=list)
     export_track_id: str | None = None
     regions: list[ExportRegion] = field(default_factory=list)
+    generated_audio_tracks: list[GeneratedAudioTrack] = field(
+        default_factory=lambda: [GeneratedAudioTrack()]
+    )
+    source_muted: bool = False
+    source_solo: bool = False
     id: str = field(default_factory=new_id)
 
     @classmethod
@@ -90,6 +135,12 @@ class MediaAsset:
                 if track.id == self.export_track_id:
                     return track
         return self.subtitle_tracks[0] if self.subtitle_tracks else None
+
+    @property
+    def generated_track(self) -> GeneratedAudioTrack:
+        if not self.generated_audio_tracks:
+            self.generated_audio_tracks.append(GeneratedAudioTrack())
+        return self.generated_audio_tracks[0]
 
 
 @dataclass(slots=True)
@@ -124,6 +175,7 @@ class Project:
     active_preset_id: str | None = None
     schema_version: int = 1
     project_path: str = ""
+    id: str = field(default_factory=new_id)
 
     def __post_init__(self) -> None:
         if self.presets and not self.active_preset_id:

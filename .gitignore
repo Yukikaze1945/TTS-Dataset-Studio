@@ -8,6 +8,7 @@ build*/
 dist*/
 *.spec
 *.ttds
+*.ttds.assets/
 *.ttds.autosave
 .coverage
 .coverage.*

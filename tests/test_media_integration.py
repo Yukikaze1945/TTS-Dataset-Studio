@@ -8,7 +8,12 @@ from threading import Event
 
 import pytest
 
-from tts_dataset_studio.domain.models import ExportPreset, ExportRegion
+from tts_dataset_studio.domain.models import (
+    ExportPreset,
+    ExportRegion,
+    GeneratedAudioClip,
+)
+from tts_dataset_studio.services.ai_monitor import build_ai_monitor_cache
 from tts_dataset_studio.services.exporter import export_region
 from tts_dataset_studio.services.media import probe_media
 
@@ -68,3 +73,44 @@ def test_probe_and_export_real_audio(tmp_path: Path) -> None:
     assert stream["channels"] == 1
     assert stream["codec_name"] == "pcm_s16le"
 
+
+def test_build_ai_monitor_cache_places_generated_clip_on_timeline(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "source.wav"
+    generated = tmp_path / "generated.wav"
+    _make_tone(source)
+    _make_tone(generated)
+    asset = probe_media(source)
+    asset.generated_track.clips.append(
+        GeneratedAudioClip(
+            path=str(generated),
+            start_ms=500,
+            source_offset_ms=100,
+            duration_ms=600,
+            source_duration_ms=1200,
+            reference_region_id="region",
+            text="generated",
+        )
+    )
+
+    output = build_ai_monitor_cache(asset, tmp_path / "monitor.flac")
+
+    assert output.is_file()
+    probe = subprocess.run(
+        [
+            shutil.which("ffprobe") or "ffprobe",
+            "-v",
+            "error",
+            "-show_entries",
+            "format=duration",
+            "-of",
+            "json",
+            str(output),
+        ],
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    duration = float(json.loads(probe.stdout)["format"]["duration"])
+    assert duration == pytest.approx(1.2, abs=0.05)

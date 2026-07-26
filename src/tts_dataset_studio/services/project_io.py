@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import shutil
 from dataclasses import fields
 from pathlib import Path
 from typing import Any, TypeVar
@@ -8,6 +9,8 @@ from typing import Any, TypeVar
 from tts_dataset_studio.domain.models import (
     ExportPreset,
     ExportRegion,
+    GeneratedAudioClip,
+    GeneratedAudioTrack,
     MediaAsset,
     Project,
     SubtitleCue,
@@ -53,6 +56,9 @@ def _write_project(project: Project, destination: Path, update_path: bool) -> No
         for track in asset["subtitle_tracks"]:
             if track["source_path"]:
                 track["source_path"] = _portable_path(track["source_path"], destination.parent)
+        for track in asset["generated_audio_tracks"]:
+            for clip in track["clips"]:
+                clip["path"] = _portable_path(clip["path"], destination.parent)
     destination.parent.mkdir(parents=True, exist_ok=True)
     temporary = destination.with_name(destination.name + ".tmp")
     temporary.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
@@ -61,8 +67,79 @@ def _write_project(project: Project, destination: Path, update_path: bool) -> No
         project.project_path = str(destination.resolve())
 
 
+def _managed_generated_dir(destination: Path) -> Path:
+    return destination.with_name(destination.name + ".assets") / "generated"
+
+
+def cleanup_unreferenced_generated_audio(project: Project) -> int:
+    """Remove orphaned audio only from this saved project's managed sidecar."""
+    if not project.project_path:
+        return 0
+    managed_dir = _managed_generated_dir(Path(project.project_path))
+    if not managed_dir.is_dir():
+        return 0
+    referenced = {
+        Path(clip.path).resolve()
+        for asset in project.assets
+        for track in asset.generated_audio_tracks
+        for clip in track.clips
+    }
+    removed = 0
+    for candidate in managed_dir.iterdir():
+        if (
+            candidate.is_file()
+            and candidate.resolve() not in referenced
+            and candidate.suffix.casefold() in {".wav", ".flac", ".mp3"}
+        ):
+            try:
+                candidate.unlink()
+                removed += 1
+            except OSError:
+                continue
+    return removed
+
+
+def _copy_generated_audio_for_save(
+    project: Project,
+    destination: Path,
+) -> dict[str, str]:
+    previous_paths: dict[str, str] = {}
+    target_dir = _managed_generated_dir(destination)
+    clips = [
+        clip
+        for asset in project.assets
+        for track in asset.generated_audio_tracks
+        for clip in track.clips
+    ]
+    if not clips:
+        return previous_paths
+    target_dir.mkdir(parents=True, exist_ok=True)
+    for clip in clips:
+        source = Path(clip.path)
+        if not source.exists():
+            continue
+        target = target_dir / f"{clip.id}{source.suffix.casefold() or '.wav'}"
+        previous_paths[clip.id] = clip.path
+        if source.resolve() != target.resolve():
+            temporary = target.with_name(target.name + ".tmp")
+            shutil.copy2(source, temporary)
+            temporary.replace(target)
+        clip.path = str(target.resolve())
+    return previous_paths
+
+
 def save_project(project: Project, destination: Path) -> None:
-    _write_project(project, destination.with_suffix(".ttds"), update_path=True)
+    destination = destination.with_suffix(".ttds")
+    previous_paths = _copy_generated_audio_for_save(project, destination)
+    try:
+        _write_project(project, destination, update_path=True)
+    except Exception:
+        for asset in project.assets:
+            for track in asset.generated_audio_tracks:
+                for clip in track.clips:
+                    if clip.id in previous_paths:
+                        clip.path = previous_paths[clip.id]
+        raise
 
 
 def save_autosave(project: Project, destination: Path) -> None:
@@ -93,6 +170,25 @@ def load_project(source: Path) -> Project:
             ExportRegion(**_filtered(ExportRegion, region))
             for region in raw_asset.get("regions", [])
         ]
+        generated_tracks: list[GeneratedAudioTrack] = []
+        for raw_track in raw_asset.get("generated_audio_tracks", []):
+            raw_track = dict(raw_track)
+            clips = []
+            for raw_clip in raw_track.get("clips", []):
+                raw_clip = dict(raw_clip)
+                raw_clip["path"] = _restore_path(raw_clip["path"], source.parent)
+                clips.append(
+                    GeneratedAudioClip(
+                        **_filtered(GeneratedAudioClip, raw_clip)
+                    )
+                )
+            raw_track["clips"] = clips
+            generated_tracks.append(
+                GeneratedAudioTrack(**_filtered(GeneratedAudioTrack, raw_track))
+            )
+        raw_asset["generated_audio_tracks"] = (
+            generated_tracks or [GeneratedAudioTrack()]
+        )
         assets.append(MediaAsset(**_filtered(MediaAsset, raw_asset)))
 
     presets = [

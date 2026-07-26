@@ -8,6 +8,7 @@ from pathlib import Path
 from PySide6.QtCore import QSettings
 
 MOSS_HOME_ENV = "MOSS_TRANSCRIBE_DIARIZE_HOME"
+INDEX_TTS_HOME_ENV = "INDEX_TTS_HOME"
 DEFAULT_MOSS_PROMPT = (
     "\u8bf7\u5c06\u97f3\u9891\u8f6c\u5199\u4e3a\u6587\u672c\uff0c"
     "\u6bcf\u4e00\u6bb5\u9700\u4ee5\u8d77\u59cb\u65f6\u95f4\u6233"
@@ -64,6 +65,34 @@ def detect_moss_root() -> Path | None:
     return next((path for path in _moss_root_candidates() if path.is_dir()), None)
 
 
+def _index_tts_root_candidates() -> list[Path]:
+    candidates: list[Path] = []
+    configured = os.environ.get(INDEX_TTS_HOME_ENV, "").strip()
+    if configured:
+        candidates.append(Path(configured).expanduser())
+    home = Path.home()
+    candidates.extend(
+        [
+            home / "index-tts",
+            Path(sys.executable).resolve().parent / "index-tts",
+        ]
+    )
+    if os.name == "nt":
+        candidates.extend(drive / "index-tts" for drive in _windows_drive_roots())
+    return candidates
+
+
+def detect_index_tts_root() -> Path | None:
+    return next(
+        (
+            path
+            for path in _index_tts_root_candidates()
+            if (path / "indextts" / "infer_v2.py").is_file()
+        ),
+        None,
+    )
+
+
 def detect_moss_model(moss_root: Path | None = None) -> str:
     if moss_root:
         local = moss_root / "pretrained" / "moss-transcribe-diarize"
@@ -113,6 +142,26 @@ class AppSettings:
     moss_temp_dir: str = ""
     moss_track_name: str = "MOSS ASR"
     unload_asr_on_exit: bool = True
+    index_tts_root: str = ""
+    index_tts_python: str = ""
+    index_tts_config: str = ""
+    index_tts_model_dir: str = ""
+    index_tts_device: str = "cuda:0"
+    index_tts_fp16: bool = True
+    index_tts_cuda_kernel: bool = False
+    index_tts_deepspeed: bool = False
+    index_tts_accel: bool = False
+    index_tts_torch_compile: bool = False
+    index_tts_temperature: float = 0.8
+    index_tts_top_p: float = 0.8
+    index_tts_top_k: int = 30
+    index_tts_num_beams: int = 3
+    index_tts_repetition_penalty: float = 10.0
+    index_tts_max_mel_tokens: int = 1500
+    index_tts_max_text_tokens: int = 120
+    index_tts_interval_silence: int = 200
+    index_tts_temp_dir: str = ""
+    unload_index_tts_on_exit: bool = True
 
     def __post_init__(self) -> None:
         if not self.moss_root:
@@ -124,6 +173,19 @@ class AppSettings:
             self.moss_python = str(root / ".venv" / "Scripts" / "python.exe")
         if not self.moss_model:
             self.moss_model = detect_moss_model(root)
+        if not self.index_tts_root:
+            detected_index_root = detect_index_tts_root()
+            if detected_index_root:
+                self.index_tts_root = str(detected_index_root)
+        index_root = Path(self.index_tts_root) if self.index_tts_root else None
+        if not self.index_tts_python and index_root:
+            self.index_tts_python = str(
+                index_root / ".venv" / "Scripts" / "python.exe"
+            )
+        if not self.index_tts_config and index_root:
+            self.index_tts_config = str(index_root / "checkpoints" / "config.yaml")
+        if not self.index_tts_model_dir and index_root:
+            self.index_tts_model_dir = str(index_root / "checkpoints")
 
     @classmethod
     def load(cls, store: QSettings) -> AppSettings:
@@ -135,6 +197,8 @@ class AppSettings:
                 raw = str(raw).casefold() in {"1", "true", "yes"}
             elif isinstance(default, int):
                 raw = int(raw)
+            elif isinstance(default, float):
+                raw = float(raw)
             else:
                 raw = str(raw)
             values[key] = raw

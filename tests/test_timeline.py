@@ -6,6 +6,7 @@ from PySide6.QtWidgets import QApplication
 
 from tts_dataset_studio.domain.models import (
     ExportRegion,
+    GeneratedAudioClip,
     MediaAsset,
     SubtitleCue,
     SubtitleTrack,
@@ -101,7 +102,12 @@ def test_plain_click_replaces_selection_and_ctrl_click_adds_or_removes(qtbot) ->
         )
     )
     timeline.show()
-    cue_y = timeline.HEADER + timeline.waveform_height + 15
+    cue_y = (
+        timeline.HEADER
+        + timeline.waveform_height
+        + timeline.TRACK_HEIGHT
+        + 15
+    )
 
     QTest.mouseClick(
         timeline,
@@ -248,7 +254,12 @@ def test_dragged_cue_edge_snaps_to_playhead(qtbot) -> None:
     )
     timeline.set_playhead(1500)
     timeline.show()
-    cue_y = timeline.HEADER + timeline.waveform_height + 15
+    cue_y = (
+        timeline.HEADER
+        + timeline.waveform_height
+        + timeline.TRACK_HEIGHT
+        + 15
+    )
 
     QTest.mousePress(
         timeline,
@@ -362,6 +373,72 @@ def test_hidden_subtitle_track_is_removed_from_timeline_layout(qtbot) -> None:
         timeline.HEADER
         + timeline.waveform_height
         + timeline.TRACK_HEIGHT
+        + timeline.TRACK_HEIGHT
         + 20
     )
     assert timeline.height() == expected_height
+
+
+def test_generated_audio_track_extends_timeline_and_selects_clip(qtbot) -> None:
+    clip = GeneratedAudioClip(
+        path="missing.wav",
+        start_ms=2500,
+        source_offset_ms=0,
+        duration_ms=2000,
+        source_duration_ms=2000,
+        reference_region_id="region",
+        text="generated",
+    )
+    asset = MediaAsset("audio.wav", "audio.wav", duration_ms=3000)
+    asset.generated_track.clips.append(clip)
+    timeline = TimelineCanvas()
+    qtbot.addWidget(timeline)
+    timeline.set_asset(asset)
+    timeline.show()
+    generated_y = timeline.HEADER + timeline.waveform_height + 15
+
+    QTest.mouseClick(
+        timeline,
+        Qt.MouseButton.LeftButton,
+        pos=QPoint(timeline._x_for_ms(3000), generated_y),
+    )
+
+    assert timeline._timeline_duration() == 4500
+    assert timeline.selected_generated_clip_ids == {clip.id}
+
+
+def test_generated_audio_clip_body_can_move(qtbot) -> None:
+    clip = GeneratedAudioClip(
+        path="missing.wav",
+        start_ms=1000,
+        source_offset_ms=0,
+        duration_ms=1000,
+        source_duration_ms=1000,
+        reference_region_id="region",
+        text="generated",
+    )
+    asset = MediaAsset("audio.wav", "audio.wav", duration_ms=5000)
+    asset.generated_track.clips.append(clip)
+    timeline = TimelineCanvas()
+    qtbot.addWidget(timeline)
+    timeline.set_asset(asset)
+    timeline.show()
+    generated_y = timeline.HEADER + timeline.waveform_height + 15
+
+    QTest.mousePress(
+        timeline,
+        Qt.MouseButton.LeftButton,
+        pos=QPoint(timeline._x_for_ms(1500), generated_y),
+    )
+    QTest.mouseMove(
+        timeline,
+        QPoint(timeline._x_for_ms(2500), generated_y),
+        delay=10,
+    )
+    QTest.mouseRelease(
+        timeline,
+        Qt.MouseButton.LeftButton,
+        pos=QPoint(timeline._x_for_ms(2500), generated_y),
+    )
+
+    assert clip.start_ms == 2000

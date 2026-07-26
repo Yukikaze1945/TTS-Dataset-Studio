@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import copy
+import io
+import json
 import os
 import shutil
 import subprocess
@@ -14,10 +16,12 @@ from PySide6.QtWidgets import QWidget
 
 from tts_dataset_studio.domain.app_settings import (
     DEFAULT_MOSS_PROMPT,
+    INDEX_TTS_HOME_ENV,
     LEGACY_MOSS_PROMPT,
     MOSS_HOME_ENV,
     AppSettings,
     _windows_drive_roots,
+    detect_index_tts_root,
     detect_moss_root,
 )
 from tts_dataset_studio.domain.models import (
@@ -30,6 +34,7 @@ from tts_dataset_studio.domain.models import (
 )
 from tts_dataset_studio.services.asr_controller import AsrController
 from tts_dataset_studio.services.exporter import export_region
+from tts_dataset_studio.services.index_tts_controller import IndexTtsController
 from tts_dataset_studio.services.media import probe_media
 from tts_dataset_studio.services.project_io import load_project, save_project
 from tts_dataset_studio.services.still_export import export_still
@@ -89,6 +94,24 @@ def test_moss_root_is_detected_from_environment(
     assert settings.moss_python == str(root / ".venv" / "Scripts" / "python.exe")
 
 
+def test_index_tts_root_is_detected_from_environment(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    root = tmp_path / "index-tts"
+    (root / "indextts").mkdir(parents=True)
+    (root / "indextts" / "infer_v2.py").write_text("", encoding="utf-8")
+    monkeypatch.setenv(INDEX_TTS_HOME_ENV, str(root))
+
+    assert detect_index_tts_root() == root
+    settings = AppSettings()
+    assert settings.index_tts_root == str(root)
+    assert settings.index_tts_python == str(
+        root / ".venv" / "Scripts" / "python.exe"
+    )
+    assert settings.index_tts_config == str(root / "checkpoints" / "config.yaml")
+
+
 def test_windows_drive_detection_only_returns_existing_logical_drives() -> None:
     if os.name != "nt":
         pytest.skip("Windows-only drive discovery")
@@ -145,8 +168,50 @@ def test_advanced_settings_dialog_exposes_save_tools_and_asr_tabs(
         "保存与命名",
         "播放与工具",
         "ASR",
+        "语音引擎",
     ]
     assert dialog.moss_python.text().endswith(r".venv\Scripts\python.exe")
+    assert dialog.index_python.text().endswith(r".venv\Scripts\python.exe")
+
+
+def test_index_tts_controller_state_messages() -> None:
+    controller = IndexTtsController()
+    loaded = []
+    analyzed = []
+    generated = []
+    controller.loaded.connect(loaded.append)
+    controller.text_analyzed.connect(analyzed.append)
+    controller.generated.connect(generated.append)
+
+    controller._handle_message(
+        {"event": "loaded", "runtime": {"gpu": "RTX"}, "id": 1}
+    )
+    controller._handle_message(
+        {"event": "analyzed", "unknown_count": 2, "id": 2}
+    )
+    controller._handle_message(
+        {"event": "generated", "duration_ms": 1234, "id": 3}
+    )
+
+    assert controller.state == "loaded"
+    assert loaded == [{"gpu": "RTX"}]
+    assert analyzed[0]["unknown_count"] == 2
+    assert generated[0]["duration_ms"] == 1234
+
+
+def test_index_tts_worker_protocol_is_utf8_jsonl(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from tts_dataset_studio.workers import index_tts_worker
+
+    output = io.BytesIO()
+    monkeypatch.setattr(index_tts_worker, "PROTOCOL_OUTPUT", output)
+
+    index_tts_worker.emit({"event": "analyzed", "text": "你好，久石奏"})
+
+    raw = output.getvalue()
+    assert raw.endswith(b"\n")
+    assert json.loads(raw.decode("utf-8"))["text"] == "你好，久石奏"
 
 
 def test_subtitle_speaker_and_origin_survive_project_round_trip(tmp_path: Path) -> None:

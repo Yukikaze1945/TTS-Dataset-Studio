@@ -25,3 +25,13 @@ def test_audio_asset_cannot_switch_away_from_waveform_preview(qtbot) -> None:
     player.set_preview_mode("video")
 
     assert player.currentWidget() is waveform
+
+
+def test_track_monitor_controls_source_and_ai_outputs(qtbot) -> None:
+    player = PlayerWidget(QWidget())
+    qtbot.addWidget(player)
+
+    player.set_track_monitor(False, True)
+
+    assert player.audio_output.isMuted()
+    assert not player.ai_audio_output.isMuted()
