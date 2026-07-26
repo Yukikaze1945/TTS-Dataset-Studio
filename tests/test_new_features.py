@@ -129,7 +129,11 @@ def test_asr_controller_logs_worker_traceback(caplog) -> None:
 def test_advanced_settings_dialog_exposes_save_tools_and_asr_tabs(
     qtbot,
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    moss_root = tmp_path / "MOSS-Transcribe-Diarize"
+    moss_root.mkdir()
+    monkeypatch.setenv(MOSS_HOME_ENV, str(moss_root))
     store = QSettings(str(tmp_path / "settings.ini"), QSettings.Format.IniFormat)
     dialog = AdvancedSettingsDialog(store)
     qtbot.addWidget(dialog)
