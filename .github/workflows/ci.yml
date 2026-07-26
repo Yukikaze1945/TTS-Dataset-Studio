@@ -1,0 +1,37 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+      - name: Install locked dependencies
+        run: uv sync --extra dev --frozen
+      - name: Ruff
+        run: uv run ruff check src tests
+      - name: Tests
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: uv run pytest
+      - name: Source startup smoke test
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: >-
+          uv run python -c "from PySide6.QtWidgets import QApplication;
+          from tts_dataset_studio.ui.main_window import MainWindow;
+          app=QApplication([]); window=MainWindow();
+          window.show(); app.processEvents(); window.close()"

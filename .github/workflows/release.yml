@@ -1,0 +1,42 @@
+name: Windows prerelease
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+      - name: Install locked dependencies
+        run: uv sync --extra dev --frozen
+      - name: Verify source
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: |
+          uv run ruff check src tests
+          uv run pytest
+      - name: Build portable Windows archive
+        shell: pwsh
+        run: |
+          $version = "${{ github.ref_name }}".TrimStart("v")
+          .\scripts\build-release.ps1 -Version $version
+      - name: Publish prerelease
+        uses: softprops/action-gh-release@v2
+        with:
+          prerelease: true
+          generate_release_notes: true
+          files: |
+            release/TTS-Dataset-Studio-${{ github.ref_name }}-windows-x64.zip
+            release/SHA256SUMS.txt

@@ -1,0 +1,91 @@
+# TTS Dataset Studio
+
+English · [简体中文](README.md)
+
+TTS Dataset Studio is a lightweight Windows workstation for extracting TTS-ready audio
+clips and editing their subtitles. It combines media import, waveform preview, multiple
+subtitle tracks, non-destructive regions, gain control, and FFmpeg export in one interface.
+
+> Current version: `v0.1.0-alpha.1`. This is a prerelease; save projects before important work.
+
+## Highlights
+
+- Drag in video or audio and automatically associate neighboring SRT, ASS, and VTT files.
+- Embedded mpv video preview, audio waveform preview, and a zoomable multi-track timeline.
+- Editable subtitle and export-region boundaries with multi-select, snapping, undo, and redo.
+- WAV, FLAC, and MP3 export with sample-rate, channel, bit-depth, gain, fade, and naming options.
+- Subtitle-based filenames and optional matching UTF-8 TXT files.
+- Frame stepping, clean still-frame export, and an optional Windows context-menu installer.
+- Optional MOSS-Transcribe-Diarize integration for timestamped, speaker-aware transcription.
+
+## Install
+
+Download `TTS-Dataset-Studio-*-windows-x64.zip` from
+[Releases](https://github.com/Yukikaze1945/TTS-Dataset-Studio/releases), extract it, and run
+`TTS Dataset Studio.exe`. FFmpeg, ffprobe, and mpv are included.
+
+To install Start Menu and Windows 11 context-menu entries:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\Install.ps1
+```
+
+## Run from source
+
+Requirements: Windows 10/11 x64, Python 3.11–3.14,
+[uv](https://docs.astral.sh/uv/), FFmpeg/ffprobe on `PATH`, and optionally mpv.
+
+```powershell
+git clone https://github.com/Yukikaze1945/TTS-Dataset-Studio.git
+cd TTS-Dataset-Studio
+uv sync --extra dev --frozen
+uv run tts-dataset-studio
+```
+
+## Shortcuts
+
+| Key | Action |
+| --- | --- |
+| Space | Play/pause |
+| I / O | Set in/out points |
+| Enter | Play the current subtitle or region |
+| E | Export with the active preset |
+| X | Delete selected export regions |
+| D / F | Previous/next video frame |
+| C | Save a clean source-video still |
+| Ctrl+S | Save project |
+| Ctrl+Z / Ctrl+Shift+Z | Undo/redo |
+| Alt+Wheel | Zoom timeline |
+| ? | Show shortcut help |
+
+## Optional MOSS ASR
+
+MOSS, PyTorch, and model weights are not distributed with this project. Install
+[MOSS-Transcribe-Diarize](https://github.com/OpenMOSS/MOSS-Transcribe-Diarize), then either:
+
+1. Set `MOSS_TRANSCRIBE_DIARIZE_HOME`.
+2. Place it at `moss-asr\MOSS-Transcribe-Diarize` on any Windows drive.
+3. Select its directory, Python environment, and model under Advanced Settings → ASR.
+
+## Development
+
+```powershell
+uv sync --extra dev --frozen
+uv run ruff check src tests
+uv run pytest
+.\scripts\fetch-runtime.ps1
+.\scripts\build-release.ps1 -Version 0.1.0-alpha.1
+```
+
+## Known limitations
+
+- Windows 10/11 x64 only.
+- One source asset per timeline; no multi-clip editing, transitions, or final video export.
+- MOSS ASR requires a separately installed Python/CUDA/model environment.
+- Noise reduction, diarization pipelines, quality scoring, and framework-specific metadata are
+  outside the V1 scope.
+
+## License
+
+Application source is [MIT licensed](LICENSE). Bundled Qt/PySide6, FFmpeg, mpv, and Python
+dependencies retain their respective licenses; see [Third-party notices](THIRD_PARTY_NOTICES.md).

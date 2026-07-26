@@ -1,0 +1,32 @@
+{
+  "ffmpeg": {
+    "version": "8.0.1-full_build",
+    "url": "https://www.gyan.dev/ffmpeg/builds/packages/ffmpeg-8.0.1-full_build.7z",
+    "sha256": "42edab4b9241ff1184b26d5f4545322227589713a7e56cf4459c4c4e30ccaaac",
+    "archive": "ffmpeg-8.0.1-full_build.7z",
+    "license": "GPL-3.0-only",
+    "homepage": "https://www.gyan.dev/ffmpeg/builds/",
+    "source": "https://github.com/FFmpeg/FFmpeg/tree/n8.0.1"
+  },
+  "mpv": {
+    "version": "0.41.0",
+    "url": "https://github.com/mpv-player/mpv/releases/download/v0.41.0/mpv-v0.41.0-x86_64-pc-windows-msvc.zip",
+    "sha256": "4e197f729f5071c6772f35fffd96e0f36e3e8a044bd9479b136bb09b7c6a80ff",
+    "archive": "mpv-v0.41.0-x86_64-pc-windows-msvc.zip",
+    "license": "LGPL-2.1-or-later AND GPL-2.0-or-later",
+    "homepage": "https://mpv.io/",
+    "source": "https://github.com/mpv-player/mpv/tree/v0.41.0",
+    "licenseFiles": [
+      {
+        "url": "https://raw.githubusercontent.com/mpv-player/mpv/v0.41.0/LICENSE.GPL",
+        "sha256": "edaef632cbb643e4e7a221717a6c441a4c1a7c918e6e4d56debc3d8739b233f6",
+        "archive": "mpv-LICENSE.GPL"
+      },
+      {
+        "url": "https://raw.githubusercontent.com/mpv-player/mpv/v0.41.0/LICENSE.LGPL",
+        "sha256": "72b672113d642cbb8ef5dcc76938db801983c56e50b1400ab930f1a64d6dc8d9",
+        "archive": "mpv-LICENSE.LGPL"
+      }
+    ]
+  }
+}

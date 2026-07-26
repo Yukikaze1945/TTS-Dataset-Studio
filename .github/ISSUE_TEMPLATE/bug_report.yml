@@ -1,0 +1,41 @@
+name: Bug report
+description: Report a reproducible TTS Dataset Studio problem
+title: "[Bug] "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: Please remove private media paths and personal data before submitting logs.
+  - type: input
+    id: version
+    attributes:
+      label: App version
+      placeholder: v0.1.0-alpha.1
+    validations:
+      required: true
+  - type: input
+    id: windows
+    attributes:
+      label: Windows version
+      placeholder: Windows 11 24H2 x64
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Reproduction steps
+      description: Include the smallest sequence that reproduces the issue.
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected and actual behavior
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Relevant log excerpt
+      description: Paste only the relevant tail from studio.log after removing private paths.
+      render: text

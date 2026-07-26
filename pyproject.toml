@@ -1,0 +1,48 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "tts-dataset-studio"
+version = "0.1.0a1"
+description = "A lightweight Windows workstation for preparing TTS audio clips and transcripts."
+readme = "README.md"
+requires-python = ">=3.11,<3.15"
+license = "MIT"
+authors = [
+  { name = "Yukikaze1945" },
+]
+dependencies = [
+  "PySide6>=6.10,<6.12",
+  "platformdirs>=4.3,<5",
+]
+
+[project.urls]
+Homepage = "https://github.com/Yukikaze1945/TTS-Dataset-Studio"
+Repository = "https://github.com/Yukikaze1945/TTS-Dataset-Studio"
+Issues = "https://github.com/Yukikaze1945/TTS-Dataset-Studio/issues"
+
+[project.optional-dependencies]
+dev = [
+  "pytest>=8.3,<10",
+  "pytest-qt>=4.4,<5",
+  "ruff>=0.11,<1",
+  "pyinstaller>=6.12,<7",
+]
+
+[project.scripts]
+tts-dataset-studio = "tts_dataset_studio.app:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/tts_dataset_studio"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]
