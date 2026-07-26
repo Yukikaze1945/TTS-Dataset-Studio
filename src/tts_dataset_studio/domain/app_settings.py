@@ -45,17 +45,15 @@ def _moss_root_candidates() -> list[Path]:
 
 
 def _windows_drive_roots() -> list[Path]:
-    list_drives = getattr(os, "listdrives", None)
-    if list_drives is not None:
-        return [Path(drive) for drive in list_drives()]
     try:
         import ctypes
 
         mask = ctypes.windll.kernel32.GetLogicalDrives()
+        get_drive_type = ctypes.windll.kernel32.GetDriveTypeW
         return [
             Path(f"{letter}:\\")
             for index, letter in enumerate("ABCDEFGHIJKLMNOPQRSTUVWXYZ")
-            if mask & (1 << index)
+            if mask & (1 << index) and get_drive_type(f"{letter}:\\") == 3
         ]
     except (AttributeError, OSError):
         anchor = Path.home().anchor
