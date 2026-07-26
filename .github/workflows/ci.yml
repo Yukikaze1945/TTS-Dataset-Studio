@@ -26,7 +26,7 @@ jobs:
       - name: Tests
         env:
           QT_QPA_PLATFORM: offscreen
-        run: uv run pytest
+        run: uv run pytest -vv --timeout=30
       - name: Source startup smoke test
         env:
           QT_QPA_PLATFORM: offscreen
