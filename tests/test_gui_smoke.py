@@ -1,6 +1,8 @@
+import pytest
 from PySide6.QtGui import QAction
 
 from tts_dataset_studio.domain.models import MediaAsset, Project, SubtitleCue, SubtitleTrack
+from tts_dataset_studio.services.media import ToolPaths
 from tts_dataset_studio.ui.main_window import MainWindow
 
 
@@ -20,6 +22,20 @@ def test_main_window_builds(qtbot) -> None:
     assert shortcuts["下一帧"] == "F"
     assert shortcuts["保存原视频静帧"] == "C"
     assert any(action.text() == "高级设置…" for action in window.findChildren(QAction))
+
+
+def test_missing_media_tools_do_not_block_main_window(
+    qtbot, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def missing_tools():
+        raise FileNotFoundError("FFmpeg not found")
+
+    monkeypatch.setattr(ToolPaths, "discover", missing_tools)
+    window = MainWindow()
+    qtbot.addWidget(window)
+
+    assert not window.export_button.isEnabled()
+    assert "TOOLS MISSING" in window.status_message.text()
 
 
 def test_setting_in_point_immediately_marks_timeline(qtbot, monkeypatch) -> None:

@@ -681,7 +681,8 @@ class MainWindow(QMainWindow):
             self.tools = ToolPaths.discover()
             self._playback_backend_changed(self.player_widget.backend_name)
         except FileNotFoundError as exc:
-            self._show_error(str(exc))
+            LOGGER.error("Required media tools are unavailable: %s", exc)
+            self.status_message.setText(f"TOOLS MISSING · {exc}")
             self.export_button.setEnabled(False)
 
     def _playback_backend_changed(self, name: str) -> None:
