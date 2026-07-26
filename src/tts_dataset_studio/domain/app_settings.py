@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import os
-import string
 import sys
 from dataclasses import asdict, dataclass
 from pathlib import Path
@@ -38,11 +37,29 @@ def _moss_root_candidates() -> list[Path]:
         ]
     )
     if os.name == "nt":
-        for letter in string.ascii_uppercase:
-            drive = Path(f"{letter}:\\")
-            if drive.exists():
-                candidates.append(drive / "moss-asr" / "MOSS-Transcribe-Diarize")
+        candidates.extend(
+            drive / "moss-asr" / "MOSS-Transcribe-Diarize"
+            for drive in _windows_drive_roots()
+        )
     return candidates
+
+
+def _windows_drive_roots() -> list[Path]:
+    list_drives = getattr(os, "listdrives", None)
+    if list_drives is not None:
+        return [Path(drive) for drive in list_drives()]
+    try:
+        import ctypes
+
+        mask = ctypes.windll.kernel32.GetLogicalDrives()
+        return [
+            Path(f"{letter}:\\")
+            for index, letter in enumerate("ABCDEFGHIJKLMNOPQRSTUVWXYZ")
+            if mask & (1 << index)
+        ]
+    except (AttributeError, OSError):
+        anchor = Path.home().anchor
+        return [Path(anchor)] if anchor else []
 
 
 def detect_moss_root() -> Path | None:

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import copy
+import os
 import shutil
 import subprocess
 from pathlib import Path
@@ -16,6 +17,7 @@ from tts_dataset_studio.domain.app_settings import (
     LEGACY_MOSS_PROMPT,
     MOSS_HOME_ENV,
     AppSettings,
+    _windows_drive_roots,
     detect_moss_root,
 )
 from tts_dataset_studio.domain.models import (
@@ -85,6 +87,16 @@ def test_moss_root_is_detected_from_environment(
     settings = AppSettings()
     assert settings.moss_root == str(root)
     assert settings.moss_python == str(root / ".venv" / "Scripts" / "python.exe")
+
+
+def test_windows_drive_detection_only_returns_existing_logical_drives() -> None:
+    if os.name != "nt":
+        pytest.skip("Windows-only drive discovery")
+
+    drives = _windows_drive_roots()
+
+    assert drives
+    assert all(drive.anchor for drive in drives)
 
 
 def test_worker_normalizes_invalid_prompt() -> None:
