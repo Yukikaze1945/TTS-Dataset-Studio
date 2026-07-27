@@ -10,7 +10,7 @@ subtitle tracks, non-destructive regions, gain control, and FFmpeg export in one
 
 ## Highlights
 
-- Drag in video or audio and automatically associate neighboring SRT, ASS, and VTT files.
+- Drag in media, associate neighboring subtitle files, and import embedded text subtitle tracks.
 - Embedded mpv video preview, audio waveform preview, and a zoomable multi-track timeline.
 - Editable subtitle and export-region boundaries with multi-select, snapping, undo, and redo.
 - WAV, FLAC, and MP3 export with sample-rate, channel, bit-depth, gain, fade, and naming options.
@@ -105,6 +105,7 @@ uv run pytest
 - MOSS ASR requires a separately installed Python/CUDA/model environment.
 - IndexTTS2 requires a separately installed Python/CUDA/model environment; only the protocol
   worker is included in portable builds.
+- Image-based embedded subtitles such as PGS, VobSub, and DVB require OCR and are not imported.
 - Noise reduction, diarization pipelines, quality scoring, and framework-specific metadata are
   outside the V1 scope.
 

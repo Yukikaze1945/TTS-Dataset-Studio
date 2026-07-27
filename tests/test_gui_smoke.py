@@ -1,5 +1,7 @@
 import pytest
+from PySide6.QtCore import Qt
 from PySide6.QtGui import QAction
+from PySide6.QtWidgets import QFormLayout, QScrollArea
 
 from tts_dataset_studio.domain.models import MediaAsset, Project, SubtitleCue, SubtitleTrack
 from tts_dataset_studio.services.media import ToolPaths
@@ -22,6 +24,29 @@ def test_main_window_builds(qtbot) -> None:
     assert shortcuts["下一帧"] == "F"
     assert shortcuts["保存原视频静帧"] == "C"
     assert any(action.text() == "高级设置…" for action in window.findChildren(QAction))
+
+
+def test_export_settings_scroll_and_wrap_in_narrow_inspector(qtbot) -> None:
+    window = MainWindow()
+    qtbot.addWidget(window)
+    window.resize(900, 650)
+    window.show()
+
+    export_tab = window.inspector_tabs.widget(1)
+
+    assert isinstance(export_tab, QScrollArea)
+    assert (
+        export_tab.horizontalScrollBarPolicy()
+        == Qt.ScrollBarPolicy.ScrollBarAlwaysOff
+    )
+    assert (
+        window.export_form.rowWrapPolicy()
+        == QFormLayout.RowWrapPolicy.WrapLongRows
+    )
+    assert (
+        window.export_form.fieldGrowthPolicy()
+        == QFormLayout.FieldGrowthPolicy.AllNonFixedFieldsGrow
+    )
 
 
 def test_missing_media_tools_do_not_block_main_window(

@@ -534,20 +534,32 @@ class MainWindow(QMainWindow):
     def _build_inspector_panel(self) -> QWidget:
         frame, layout = self._panel()
         tabs = QTabWidget()
-        tabs.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Ignored)
-        tabs.addTab(self._build_clip_tab(), "片段")
-        tabs.addTab(self._build_export_tab(), "导出")
+        tabs.setMinimumWidth(0)
+        tabs.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
+        tabs.addTab(self._scrollable_inspector_tab(self._build_clip_tab()), "片段")
+        tabs.addTab(self._scrollable_inspector_tab(self._build_export_tab()), "导出")
+        self.inspector_tabs = tabs
+        layout.addWidget(tabs)
+        return frame
+
+    def _scrollable_inspector_tab(self, content: QWidget) -> QScrollArea:
         scroll = QScrollArea()
         scroll.setFrameShape(QFrame.Shape.NoFrame)
         scroll.setWidgetResizable(True)
-        scroll.setWidget(tabs)
-        layout.addWidget(scroll)
-        return frame
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        content.setMinimumWidth(0)
+        content.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
+        scroll.setWidget(content)
+        return scroll
 
     def _build_clip_tab(self) -> QWidget:
         tab = QWidget()
         layout = QVBoxLayout(tab)
         form = QFormLayout()
+        form.setRowWrapPolicy(QFormLayout.RowWrapPolicy.WrapLongRows)
+        form.setFieldGrowthPolicy(
+            QFormLayout.FieldGrowthPolicy.AllNonFixedFieldsGrow
+        )
         self.export_track_combo = QComboBox()
         self.export_track_combo.currentIndexChanged.connect(self._export_track_changed)
         form.addRow("导出字幕轨", self.export_track_combo)
@@ -599,6 +611,11 @@ class MainWindow(QMainWindow):
         tab = QWidget()
         layout = QVBoxLayout(tab)
         form = QFormLayout()
+        form.setRowWrapPolicy(QFormLayout.RowWrapPolicy.WrapLongRows)
+        form.setFieldGrowthPolicy(
+            QFormLayout.FieldGrowthPolicy.AllNonFixedFieldsGrow
+        )
+        self.export_form = form
         self.format_combo = QComboBox()
         self.format_combo.addItems(["wav", "flac", "mp3"])
         self.format_combo.currentTextChanged.connect(self._preset_changed)
@@ -643,6 +660,10 @@ class MainWindow(QMainWindow):
         layout.addWidget(QLabel("无字幕命名模板"))
         layout.addWidget(self.naming_edit)
         regex_form = QFormLayout()
+        regex_form.setRowWrapPolicy(QFormLayout.RowWrapPolicy.WrapLongRows)
+        regex_form.setFieldGrowthPolicy(
+            QFormLayout.FieldGrowthPolicy.AllNonFixedFieldsGrow
+        )
         self.regex_pattern = QLineEdit()
         self.regex_pattern.setPlaceholderText(r"可选，例如 _EP\d+$")
         self.regex_pattern.textChanged.connect(self._preset_changed)
@@ -839,7 +860,14 @@ class MainWindow(QMainWindow):
                 self.asset_list.setCurrentRow(len(self.project.assets) - 1)
                 self._activate_asset(asset)
             self._mark_dirty()
-            self.status_message.setText(f"IMPORTED · {asset.display_name}")
+            subtitle_summary = (
+                f" · {len(asset.subtitle_tracks)} 条字幕轨"
+                if asset.subtitle_tracks
+                else ""
+            )
+            self.status_message.setText(
+                f"IMPORTED · {asset.display_name}{subtitle_summary}"
+            )
         except Exception as exc:  # noqa: BLE001
             self._show_error(str(exc))
         finally:

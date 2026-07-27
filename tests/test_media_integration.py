@@ -74,6 +74,59 @@ def test_probe_and_export_real_audio(tmp_path: Path) -> None:
     assert stream["codec_name"] == "pcm_s16le"
 
 
+def test_probe_imports_editable_embedded_subtitle_track(tmp_path: Path) -> None:
+    subtitle = tmp_path / "embedded.srt"
+    subtitle.write_text(
+        "1\n00:00:00,100 --> 00:00:00,900\n内嵌字幕测试\n",
+        encoding="utf-8",
+    )
+    source = tmp_path / "episode.mkv"
+    subprocess.run(
+        [
+            shutil.which("ffmpeg") or "ffmpeg",
+            "-v",
+            "error",
+            "-f",
+            "lavfi",
+            "-i",
+            "color=c=black:s=320x180:d=1.2",
+            "-f",
+            "lavfi",
+            "-i",
+            "sine=frequency=440:duration=1.2",
+            "-i",
+            str(subtitle),
+            "-map",
+            "0:v",
+            "-map",
+            "1:a",
+            "-map",
+            "2:s",
+            "-c:v",
+            "mpeg4",
+            "-c:a",
+            "pcm_s16le",
+            "-c:s",
+            "srt",
+            "-metadata:s:s:0",
+            "language=jpn",
+            "-metadata:s:s:0",
+            "title=Japanese",
+            "-shortest",
+            str(source),
+        ],
+        check=True,
+    )
+
+    asset = probe_media(source)
+
+    assert asset.has_video
+    assert len(asset.subtitle_tracks) == 1
+    assert asset.subtitle_tracks[0].name == "内嵌字幕 1 · jpn · Japanese"
+    assert asset.subtitle_tracks[0].source_path == ""
+    assert asset.subtitle_tracks[0].cues[0].text == "内嵌字幕测试"
+
+
 def test_build_ai_monitor_cache_places_generated_clip_on_timeline(
     tmp_path: Path,
 ) -> None:
