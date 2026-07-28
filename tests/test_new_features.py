@@ -160,7 +160,11 @@ def test_advanced_settings_dialog_exposes_save_tools_and_asr_tabs(
 ) -> None:
     moss_root = tmp_path / "MOSS-Transcribe-Diarize"
     moss_root.mkdir()
+    index_root = tmp_path / "index-tts"
+    (index_root / "indextts").mkdir(parents=True)
+    (index_root / "indextts" / "infer_v2.py").write_text("", encoding="utf-8")
     monkeypatch.setenv(MOSS_HOME_ENV, str(moss_root))
+    monkeypatch.setenv(INDEX_TTS_HOME_ENV, str(index_root))
     store = QSettings(str(tmp_path / "settings.ini"), QSettings.Format.IniFormat)
     dialog = AdvancedSettingsDialog(store)
     qtbot.addWidget(dialog)
