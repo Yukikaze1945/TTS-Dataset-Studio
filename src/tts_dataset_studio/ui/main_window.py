@@ -1200,15 +1200,7 @@ class MainWindow(QMainWindow):
         track = next(track for track in asset.subtitle_tracks if track.id == track_id)
         cue = next(cue for cue in track.cues if cue.id == cue_id)
         self.selected_cue = (track_id, cue_id) if selected else None
-        self.cue_start.blockSignals(True)
-        self.cue_end.blockSignals(True)
-        self.cue_text.blockSignals(True)
-        self.cue_start.setValue(cue.start_ms)
-        self.cue_end.setValue(cue.end_ms)
-        self.cue_text.setPlainText(cue.text)
-        self.cue_start.blockSignals(False)
-        self.cue_end.blockSignals(False)
-        self.cue_text.blockSignals(False)
+        self._show_cue_in_editor(cue)
         matching = next(
             (
                 region
@@ -1226,6 +1218,22 @@ class MainWindow(QMainWindow):
         self.timeline.update()
         self._update_preview_subtitle(cue.start_ms)
         self._update_selection_status()
+
+    def _show_cue_in_editor(self, cue: SubtitleCue | None) -> None:
+        self.cue_start.blockSignals(True)
+        self.cue_end.blockSignals(True)
+        self.cue_text.blockSignals(True)
+        if cue is None:
+            self.cue_text.clear()
+            self.cue_text.setPlaceholderText("当前字幕轨在选区内没有字幕")
+        else:
+            self.cue_start.setValue(cue.start_ms)
+            self.cue_end.setValue(cue.end_ms)
+            self.cue_text.setPlainText(cue.text)
+            self.cue_text.setPlaceholderText("选择字幕后可编辑文本")
+        self.cue_start.blockSignals(False)
+        self.cue_end.blockSignals(False)
+        self.cue_text.blockSignals(False)
 
     def _region_selected(
         self,
@@ -1371,7 +1379,23 @@ class MainWindow(QMainWindow):
     def _export_track_changed(self) -> None:
         asset = self.project.active_asset
         if asset:
-            asset.export_track_id = self.export_track_combo.currentData()
+            track_id = self.export_track_combo.currentData()
+            asset.export_track_id = track_id
+            region = self._current_region() if self.selected_region_id else None
+            track = next(
+                (item for item in asset.subtitle_tracks if item.id == track_id),
+                None,
+            )
+            cue = (
+                track.cue_for_region(region.start_ms, region.end_ms)
+                if track and region
+                else None
+            )
+            self.selected_cue = (track.id, cue.id) if track and cue else None
+            self.timeline.selected_cue_ids = {cue.id} if cue else set()
+            self.timeline.selected_cue_id = cue.id if cue else None
+            self._show_cue_in_editor(cue)
+            self.timeline.update()
             self._mark_dirty()
 
     def _load_gain(self) -> None:
@@ -1498,7 +1522,11 @@ class MainWindow(QMainWindow):
                 continue
             for cue in track.cues:
                 if cue.start_ms <= position < cue.end_ms:
-                    text = " ".join(cue.text.split())
+                    text = "\n".join(
+                        " ".join(line.split())
+                        for line in cue.text.splitlines()
+                        if line.strip()
+                    )
                     if text and text not in visible_lines:
                         visible_lines.append(text)
         self.player_widget.set_subtitle_text("\n".join(visible_lines))

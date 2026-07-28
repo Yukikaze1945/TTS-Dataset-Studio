@@ -21,7 +21,7 @@ def test_parse_srt_and_clean_markup(tmp_path: Path) -> None:
 
     assert track.name == "ja"
     assert track.cues[0].start_ms == 1200
-    assert track.cues[0].text == "こんにちは 世界"
+    assert track.cues[0].text == "こんにちは\n世界"
 
 
 def test_parse_ass_dialogue(tmp_path: Path) -> None:
@@ -29,14 +29,15 @@ def test_parse_ass_dialogue(tmp_path: Path) -> None:
     source.write_text(
         "[Events]\n"
         "Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\n"
-        "Dialogue: 0,0:00:01.00,0:00:02.50,Default,,0,0,0,,{\\i1}Hello\\Nworld\n",
+        "Dialogue: 0,0:00:01.00,0:00:02.50,Default,,0,0,0,,"
+        "{\\i1}中文\\N{\\r}日本語\n",
         encoding="utf-8",
     )
 
     track = parse_subtitle(source)
 
     assert track.cues[0].end_ms == 2500
-    assert track.cues[0].text == "Hello world"
+    assert track.cues[0].text == "中文\n日本語"
 
 
 def test_find_matching_subtitles_respects_stem_boundary(tmp_path: Path) -> None:

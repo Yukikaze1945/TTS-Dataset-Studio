@@ -16,7 +16,11 @@ def clean_subtitle_text(value: str) -> str:
     value = _ASS_TAG.sub("", value)
     value = _HTML_TAG.sub("", value)
     value = value.replace(r"\N", "\n").replace(r"\n", "\n")
-    return " ".join(html.unescape(value).split())
+    lines = [
+        " ".join(line.split())
+        for line in html.unescape(value).splitlines()
+    ]
+    return "\n".join(line for line in lines if line)
 
 
 def _clock_to_ms(value: str) -> int:
