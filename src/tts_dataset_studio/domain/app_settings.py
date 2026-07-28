@@ -119,6 +119,8 @@ def detect_moss_model(moss_root: Path | None = None) -> str:
 
 @dataclass(slots=True)
 class AppSettings:
+    theme: str = "system"
+    confirm_before_export: bool = False
     audio_output_mode: str = "source"
     audio_output_dir: str = ""
     still_output_mode: str = "source"
@@ -126,6 +128,16 @@ class AppSettings:
     still_format: str = "png"
     jpeg_quality: int = 95
     audio_naming_template: str = "{source}_{index:04d}_{start}"
+    export_container: str = "wav"
+    export_sample_rate: int = 24000
+    export_channels: int = 1
+    export_codec: str = "pcm_s16le"
+    export_write_txt: bool = True
+    export_peak_normalize: bool = False
+    export_fade_in_ms: int = 0
+    export_fade_out_ms: int = 0
+    export_regex_pattern: str = ""
+    export_regex_replacement: str = ""
     still_naming_template: str = "{source}_{timecode}"
     open_after_export: bool = False
     scrub_hz: int = 30

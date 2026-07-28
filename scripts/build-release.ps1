@@ -58,15 +58,48 @@ foreach ($pattern in $licensePackages) {
     Join-Path $staging "TTS Dataset Studio.exe"
 )
 
+$isccCommand = Get-Command "ISCC.exe" -ErrorAction SilentlyContinue
+$isccCandidates = @(
+    if ($isccCommand) { $isccCommand.Source }
+    (Join-Path ${env:ProgramFiles(x86)} "Inno Setup 6\ISCC.exe")
+    (Join-Path $env:LOCALAPPDATA "Programs\Inno Setup 6\ISCC.exe")
+)
+$iscc = $isccCandidates | Where-Object {
+    $_ -and (Test-Path -LiteralPath $_)
+} | Select-Object -First 1
+if (-not $iscc -or -not (Test-Path -LiteralPath $iscc)) {
+    throw "Inno Setup 6 compiler was not found. Install Inno Setup or add ISCC.exe to PATH."
+}
+& $iscc `
+    "/DAppVersion=$Version" `
+    "/DSourceDir=$staging" `
+    "/DReleaseDir=$outputRoot" `
+    (Join-Path $projectRoot "packaging\installer.iss")
+if ($LASTEXITCODE -ne 0) {
+    throw "Inno Setup failed with exit code $LASTEXITCODE."
+}
+$installer = Join-Path $OutputRoot "TTS-Dataset-Studio-v$Version-setup-x64.exe"
+if (-not (Test-Path -LiteralPath $installer)) {
+    throw "Expected installer was not created: $installer"
+}
+
 $zip = Join-Path $OutputRoot "$packageName.zip"
 if (Test-Path -LiteralPath $zip) {
     Remove-Item -LiteralPath $zip -Force
 }
 Compress-Archive -LiteralPath $staging -DestinationPath $zip -CompressionLevel Optimal
-$hash = (Get-FileHash -LiteralPath $zip -Algorithm SHA256).Hash.ToLowerInvariant()
+$zipHash = (Get-FileHash -LiteralPath $zip -Algorithm SHA256).Hash.ToLowerInvariant()
+$installerHash = (
+    Get-FileHash -LiteralPath $installer -Algorithm SHA256
+).Hash.ToLowerInvariant()
 $checksumFile = Join-Path $OutputRoot "SHA256SUMS.txt"
-Set-Content -LiteralPath $checksumFile -Value "$hash  $([IO.Path]::GetFileName($zip))" -Encoding ASCII
+@(
+    "$zipHash  $([IO.Path]::GetFileName($zip))"
+    "$installerHash  $([IO.Path]::GetFileName($installer))"
+) | Set-Content -LiteralPath $checksumFile -Encoding ASCII
 
 Write-Output "RELEASE_ZIP=$zip"
-Write-Output "RELEASE_SHA256=$hash"
+Write-Output "RELEASE_INSTALLER=$installer"
+Write-Output "RELEASE_ZIP_SHA256=$zipHash"
+Write-Output "RELEASE_INSTALLER_SHA256=$installerHash"
 Write-Output "CHECKSUM_FILE=$checksumFile"

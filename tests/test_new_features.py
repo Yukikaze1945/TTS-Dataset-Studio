@@ -46,6 +46,8 @@ from tts_dataset_studio.ui.player import PlayerWidget
 def test_app_settings_round_trip(tmp_path: Path) -> None:
     store = QSettings(str(tmp_path / "settings.ini"), QSettings.Format.IniFormat)
     value = AppSettings(
+        theme="light",
+        confirm_before_export=True,
         audio_output_mode="custom",
         audio_output_dir=str(tmp_path / "audio"),
         still_format="jpeg",
@@ -56,6 +58,8 @@ def test_app_settings_round_trip(tmp_path: Path) -> None:
     restored = AppSettings.load(store)
 
     assert restored.audio_output_mode == "custom"
+    assert restored.theme == "light"
+    assert restored.confirm_before_export
     assert restored.audio_output_dir == str(tmp_path / "audio")
     assert restored.still_format == "jpeg"
     assert restored.moss_device == "cpu"
@@ -165,10 +169,11 @@ def test_advanced_settings_dialog_exposes_save_tools_and_asr_tabs(
 
     assert tabs is not None
     assert [tabs.tabText(index) for index in range(tabs.count())] == [
-        "保存与命名",
-        "播放与工具",
-        "ASR",
-        "语音引擎",
+        "常规与外观",
+        "导出与命名",
+        "播放与时间线",
+        "字幕",
+        "AI 引擎",
     ]
     assert dialog.moss_python.text().endswith(r".venv\Scripts\python.exe")
     assert dialog.index_python.text().endswith(r".venv\Scripts\python.exe")

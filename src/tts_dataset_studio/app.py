@@ -5,13 +5,14 @@ import sys
 from pathlib import Path
 
 from platformdirs import user_log_path
-from PySide6.QtCore import Qt
+from PySide6.QtCore import QSettings, Qt
 from PySide6.QtGui import QFont, QFontDatabase
 from PySide6.QtWidgets import QApplication
 
+from tts_dataset_studio.domain.app_settings import AppSettings
 from tts_dataset_studio.services.project_io import load_project
 from tts_dataset_studio.ui.main_window import MainWindow
-from tts_dataset_studio.ui.theme import APP_STYLE
+from tts_dataset_studio.ui.theme import build_stylesheet
 
 
 def configure_logging() -> None:
@@ -45,7 +46,8 @@ def main() -> int:
     app.setApplicationName("TTS Dataset Studio")
     app.setOrganizationName("OpenAI")
     app.setFont(QFont("Microsoft YaHei UI", 10))
-    app.setStyleSheet(APP_STYLE)
+    settings = AppSettings.load(QSettings("OpenAI", "TTS Dataset Studio"))
+    app.setStyleSheet(build_stylesheet(settings.theme))
     window = MainWindow()
     window.show()
     if len(sys.argv) > 1:

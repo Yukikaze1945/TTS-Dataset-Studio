@@ -20,7 +20,7 @@ htmlcov/
 *.tmp
 *.bak
 runtime/
-release/
+release*/
 
 # Local media and model data must never be committed.
 *.wav
