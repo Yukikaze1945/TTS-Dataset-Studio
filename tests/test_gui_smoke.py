@@ -58,6 +58,30 @@ def test_studio_shell_uses_progressive_navigation(qtbot) -> None:
     window.dirty = False
 
 
+def test_top_bar_prioritizes_core_actions_in_compact_workspace(qtbot) -> None:
+    window = MainWindow()
+    qtbot.addWidget(window)
+    asset = MediaAsset("missing.wav", "missing.wav", duration_ms=5000)
+    window.project = Project(assets=[asset], active_asset_id=asset.id)
+    window._show_workspace()
+    window.resize(1280, 720)
+    window.show()
+    qtbot.wait(20)
+
+    assert window.settings_button.isVisible()
+    assert window.top_import_button.isVisible()
+    assert not window.help_button.isVisible()
+    assert not window.redo_button.isVisible()
+    assert window.settings_button.geometry().right() <= window.top_bar.rect().right()
+
+    window.resize(1600, 900)
+    qtbot.wait(20)
+
+    assert window.help_button.isVisible()
+    assert window.redo_button.isVisible()
+    window.dirty = False
+
+
 def test_export_settings_scroll_and_wrap_in_narrow_inspector(qtbot) -> None:
     window = MainWindow()
     qtbot.addWidget(window)
@@ -273,6 +297,9 @@ def test_narrow_workspace_collapses_library(qtbot, tmp_path) -> None:
 
     assert window.library_panel.isHidden()
     assert window.context_bar.isHidden()
+    assert window.settings_button.isVisible()
+    assert not window.undo_button.isVisible()
+    assert window.settings_button.geometry().right() <= window.top_bar.rect().right()
     window.dirty = False
 
 

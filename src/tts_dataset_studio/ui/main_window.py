@@ -397,7 +397,8 @@ class MainWindow(QMainWindow):
         root_layout = QVBoxLayout(root)
         root_layout.setContentsMargins(14, 10, 14, 0)
         root_layout.setSpacing(8)
-        root_layout.addWidget(self._build_top_bar())
+        self.top_bar = self._build_top_bar()
+        root_layout.addWidget(self.top_bar)
 
         self.workspace_stack = QStackedWidget()
         self.empty_workspace = EmptyWorkspace()
@@ -523,31 +524,37 @@ class MainWindow(QMainWindow):
         self.redo_button.clicked.connect(self.undo_stack.redo)
         self.undo_stack.canRedoChanged.connect(self.redo_button.setEnabled)
         layout.addWidget(self.redo_button)
-        help_button = QPushButton("快捷键")
-        help_button.setObjectName("quietAction")
-        help_button.setToolTip("快捷键")
-        help_button.clicked.connect(self._show_shortcuts)
-        layout.addWidget(help_button)
-        settings_button = QPushButton("设置")
-        settings_button.setObjectName("quietAction")
-        settings_button.clicked.connect(self._show_advanced_settings)
-        layout.addWidget(settings_button)
+        self.help_button = QPushButton("快捷键")
+        self.help_button.setObjectName("quietAction")
+        self.help_button.setToolTip("快捷键  ?")
+        self.help_button.clicked.connect(self._show_shortcuts)
+        layout.addWidget(self.help_button)
+        self.settings_button = QPushButton("设置")
+        self.settings_button.setObjectName("quietAction")
+        self.settings_button.clicked.connect(self._show_advanced_settings)
+        layout.addWidget(self.settings_button)
         return frame
 
     def _show_empty_workspace(self) -> None:
         if hasattr(self, "workspace_stack"):
             self.workspace_stack.setCurrentIndex(0)
-            self.sidebar_button.hide()
-            self.timecode_label.hide()
-            self.undo_button.hide()
-            self.redo_button.hide()
+            self._update_top_bar_density()
 
     def _show_workspace(self) -> None:
         self.workspace_stack.setCurrentIndex(1)
-        self.sidebar_button.show()
-        self.timecode_label.show()
-        self.undo_button.show()
-        self.redo_button.show()
+        self._update_top_bar_density()
+
+    def _update_top_bar_density(self) -> None:
+        if not hasattr(self, "workspace_stack"):
+            return
+        has_workspace = self.workspace_stack.currentIndex() == 1
+        compact = self.width() < 1450
+        extra_compact = self.width() < 1180
+        self.sidebar_button.setVisible(has_workspace)
+        self.timecode_label.setVisible(has_workspace)
+        self.undo_button.setVisible(has_workspace and not extra_compact)
+        self.redo_button.setVisible(has_workspace and not compact)
+        self.help_button.setVisible(not compact)
 
     def _toggle_sidebar(self) -> None:
         if not self.project.assets:
@@ -577,6 +584,8 @@ class MainWindow(QMainWindow):
 
     def resizeEvent(self, event: QResizeEvent) -> None:  # noqa: N802
         super().resizeEvent(event)
+        if hasattr(self, "help_button"):
+            self._update_top_bar_density()
         if not hasattr(self, "library_panel") or not self.project.assets:
             return
         if event.size().width() < 1100:

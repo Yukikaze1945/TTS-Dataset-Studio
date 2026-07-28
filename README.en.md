@@ -8,6 +8,13 @@ subtitle tracks, non-destructive regions, gain control, and FFmpeg export in one
 
 > Current version: `v0.2.0-alpha.1`. This is a prerelease; save projects before important work.
 
+## Studio Fluent interface
+
+- Empty projects show one import entry point and a three-step guide.
+- Imported media opens a single workspace with library, preview, timeline, and contextual actions.
+- Clip properties appear only when requested; encoding, AI engines, caches, and tool paths stay in Settings.
+- Dark, light, and Windows-system themes are supported, with automatic library collapse in narrow windows.
+
 ## Highlights
 
 - Drag in media, associate neighboring subtitle files, and import embedded text subtitle tracks.
