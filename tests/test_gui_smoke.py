@@ -34,6 +34,30 @@ def test_main_window_builds(qtbot) -> None:
     assert not window.context_bar.isVisible()
 
 
+def test_studio_shell_uses_progressive_navigation(qtbot) -> None:
+    window = MainWindow()
+    qtbot.addWidget(window)
+    window.show()
+
+    assert window.menuBar().isHidden()
+    assert window.project_menu_button.menu() is window.file_menu
+    assert window.sidebar_button.isHidden()
+    assert window.timecode_label.isHidden()
+    assert window.library_tabs.count() == 2
+    assert window.library_tabs.tabText(0) == "素材"
+    assert window.library_tabs.tabText(1) == "字幕"
+
+    asset = MediaAsset("missing.wav", "missing.wav", duration_ms=5000)
+    window.project = Project(assets=[asset], active_asset_id=asset.id)
+    window._show_workspace()
+    window._set_project_title()
+
+    assert not window.sidebar_button.isHidden()
+    assert not window.timecode_label.isHidden()
+    assert window.library_tabs.tabText(0) == "素材  1"
+    window.dirty = False
+
+
 def test_export_settings_scroll_and_wrap_in_narrow_inspector(qtbot) -> None:
     window = MainWindow()
     qtbot.addWidget(window)

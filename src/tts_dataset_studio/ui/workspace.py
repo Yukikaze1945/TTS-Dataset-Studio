@@ -46,45 +46,74 @@ class WorkspaceState(QObject):
 
 class EmptyWorkspace(QWidget):
     import_requested = Signal()
+    open_project_requested = Signal()
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self.setObjectName("emptyWorkspace")
         outer = QVBoxLayout(self)
-        outer.setContentsMargins(28, 28, 28, 28)
-        outer.addStretch(2)
+        outer.setContentsMargins(40, 32, 40, 44)
+        outer.addStretch(3)
 
-        card = QFrame()
-        card.setObjectName("welcomeCard")
-        card.setMaximumWidth(680)
-        layout = QVBoxLayout(card)
-        layout.setContentsMargins(54, 48, 54, 44)
-        layout.setSpacing(16)
+        hero = QWidget()
+        hero.setMaximumWidth(760)
+        layout = QVBoxLayout(hero)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(18)
 
-        mark = QLabel("TTS")
-        mark.setObjectName("welcomeMark")
-        mark.setAlignment(Qt.AlignmentFlag.AlignHCenter)
-        layout.addWidget(mark)
+        brand_row = QHBoxLayout()
+        brand_row.setSpacing(10)
+        brand_row.addStretch()
+        mark = QFrame()
+        mark.setObjectName("brandMark")
+        mark.setFixedSize(38, 38)
+        mark_layout = QHBoxLayout(mark)
+        mark_layout.setContentsMargins(8, 8, 8, 8)
+        mark_layout.setSpacing(2)
+        for height in (8, 15, 22, 13, 18):
+            bar = QFrame()
+            bar.setObjectName("signalBar")
+            bar.setFixedSize(3, height)
+            mark_layout.addWidget(
+                bar,
+                0,
+                Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignBottom,
+            )
+        brand_row.addWidget(mark)
+        product = QLabel("TTS Dataset Studio")
+        product.setObjectName("welcomeProduct")
+        brand_row.addWidget(product)
+        brand_row.addStretch()
+        layout.addLayout(brand_row)
 
-        title = QLabel("从一段声音开始")
+        title = QLabel("把声音，变成可以训练的数据")
         title.setObjectName("welcomeTitle")
         title.setAlignment(Qt.AlignmentFlag.AlignHCenter)
         layout.addWidget(title)
 
         subtitle = QLabel(
-            "把音频或视频拖到这里。字幕、波形和时间线会自动准备好，"
-            "然后选择一句话即可试听、识别或导出。"
+            "拖入音频或视频，字幕、波形和时间线会自动准备好。"
+            "\n选择一句话，就可以试听、识别、生成语音或直接导出。"
         )
         subtitle.setObjectName("welcomeSubtitle")
         subtitle.setWordWrap(True)
         subtitle.setAlignment(Qt.AlignmentFlag.AlignHCenter)
         layout.addWidget(subtitle)
 
+        button_row = QHBoxLayout()
+        button_row.addStretch()
         button = QPushButton("选择音视频")
         button.setObjectName("primaryAction")
-        button.setMinimumHeight(42)
+        button.setMinimumSize(210, 44)
         button.clicked.connect(self.import_requested)
-        layout.addWidget(button)
+        button_row.addWidget(button)
+        open_button = QPushButton("打开工程")
+        open_button.setObjectName("secondaryAction")
+        open_button.setMinimumHeight(44)
+        open_button.clicked.connect(self.open_project_requested)
+        button_row.addWidget(open_button)
+        button_row.addStretch()
+        layout.addLayout(button_row)
 
         hint = QLabel("也可以直接拖入 WAV、FLAC、MP3、MP4、MKV 等文件")
         hint.setObjectName("muted")
@@ -92,16 +121,18 @@ class EmptyWorkspace(QWidget):
         layout.addWidget(hint)
 
         steps = QHBoxLayout()
-        steps.setSpacing(18)
+        steps.setContentsMargins(0, 18, 0, 0)
+        steps.setSpacing(0)
         for number, name, detail in (
-            ("1", "导入", "拖入素材"),
-            ("2", "选择", "点击字幕或划定区间"),
-            ("3", "完成", "按 E 一键导出"),
+            ("01", "导入素材", "自动准备字幕与波形"),
+            ("02", "选择声音", "点击字幕或划定区间"),
+            ("03", "开始制作", "试听、识别、生成或导出"),
         ):
             item = QFrame()
             item.setObjectName("welcomeStep")
             item_layout = QVBoxLayout(item)
-            item_layout.setContentsMargins(12, 10, 12, 10)
+            item_layout.setContentsMargins(20, 14, 20, 14)
+            item_layout.setSpacing(4)
             number_label = QLabel(number)
             number_label.setObjectName("stepNumber")
             name_label = QLabel(name)
@@ -117,10 +148,10 @@ class EmptyWorkspace(QWidget):
 
         row = QHBoxLayout()
         row.addStretch()
-        row.addWidget(card)
+        row.addWidget(hero)
         row.addStretch()
         outer.addLayout(row)
-        outer.addStretch(3)
+        outer.addStretch(4)
 
 
 class ContextActionBar(QFrame):
@@ -147,6 +178,9 @@ class ContextActionBar(QFrame):
         self.tts_button = self._button("生成语音", "G", self.generate_requested)
         self.delete_button = self._button("删除", "X", self.delete_requested)
         self.export_button = self._button("导出", "E", self.export_requested, primary=True)
+        self.asr_button.setObjectName("secondaryAction")
+        self.tts_button.setObjectName("secondaryAction")
+        self.delete_button.setObjectName("destructiveAction")
         for button in (
             self.play_button,
             self.edit_button,

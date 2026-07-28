@@ -169,16 +169,17 @@ def test_advanced_settings_dialog_exposes_save_tools_and_asr_tabs(
     dialog = AdvancedSettingsDialog(store)
     qtbot.addWidget(dialog)
 
-    tabs = dialog.findChild(type(dialog.layout().itemAt(0).widget()))
-
-    assert tabs is not None
-    assert [tabs.tabText(index) for index in range(tabs.count())] == [
+    assert [
+        dialog.settings_nav.item(index).text()
+        for index in range(dialog.settings_nav.count())
+    ] == [
         "常规与外观",
         "导出与命名",
         "播放与时间线",
         "字幕",
         "AI 引擎",
     ]
+    assert dialog.settings_stack.count() == 5
     assert dialog.moss_python.text().endswith(r".venv\Scripts\python.exe")
     assert dialog.index_python.text().endswith(r".venv\Scripts\python.exe")
 

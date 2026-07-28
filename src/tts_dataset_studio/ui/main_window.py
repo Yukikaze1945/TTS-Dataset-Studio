@@ -54,6 +54,7 @@ from PySide6.QtWidgets import (
     QStackedWidget,
     QStatusBar,
     QTabWidget,
+    QToolButton,
     QTreeWidget,
     QTreeWidgetItem,
     QVBoxLayout,
@@ -401,6 +402,7 @@ class MainWindow(QMainWindow):
         self.workspace_stack = QStackedWidget()
         self.empty_workspace = EmptyWorkspace()
         self.empty_workspace.import_requested.connect(self._choose_media)
+        self.empty_workspace.open_project_requested.connect(self.open_project)
         self.workspace_stack.addWidget(self.empty_workspace)
         self.workspace_stack.addWidget(self._build_workspace_page())
         root_layout.addWidget(self.workspace_stack, 1)
@@ -477,9 +479,19 @@ class MainWindow(QMainWindow):
     def _build_top_bar(self) -> QWidget:
         frame = QFrame()
         frame.setObjectName("topBar")
+        frame.setMinimumHeight(50)
         layout = QHBoxLayout(frame)
-        layout.setContentsMargins(2, 3, 2, 3)
-        self.sidebar_button = QPushButton("素材")
+        layout.setContentsMargins(2, 5, 2, 6)
+        layout.setSpacing(6)
+        self.project_menu_button = QToolButton()
+        self.project_menu_button.setText("项目")
+        self.project_menu_button.setObjectName("projectMenu")
+        self.project_menu_button.setPopupMode(
+            QToolButton.ToolButtonPopupMode.InstantPopup
+        )
+        self.project_menu_button.setToolTip("新建、打开或保存工程")
+        layout.addWidget(self.project_menu_button)
+        self.sidebar_button = QPushButton("素材与字幕")
         self.sidebar_button.setObjectName("quietAction")
         self.sidebar_button.setToolTip("展开或收起素材栏")
         self.sidebar_button.clicked.connect(self._toggle_sidebar)
@@ -491,22 +503,27 @@ class MainWindow(QMainWindow):
         self.timecode_label = QLabel("00:00:00.000")
         self.timecode_label.setObjectName("timecode")
         layout.addWidget(self.timecode_label)
-        layout.addSpacing(10)
-        import_button = QPushButton("＋ 导入")
-        import_button.setObjectName("quietAction")
-        import_button.clicked.connect(self._choose_media)
-        layout.addWidget(import_button)
-        undo_button = QPushButton("撤销")
-        undo_button.setObjectName("quietAction")
-        undo_button.setToolTip("撤销  Ctrl+Z")
-        undo_button.clicked.connect(self.undo_stack.undo)
-        layout.addWidget(undo_button)
-        redo_button = QPushButton("重做")
-        redo_button.setObjectName("quietAction")
-        redo_button.setToolTip("重做  Ctrl+Shift+Z")
-        redo_button.clicked.connect(self.undo_stack.redo)
-        layout.addWidget(redo_button)
-        help_button = QPushButton("?")
+        layout.addSpacing(12)
+        self.top_import_button = QPushButton("导入素材")
+        self.top_import_button.setObjectName("primaryAction")
+        self.top_import_button.setToolTip("导入音频或视频")
+        self.top_import_button.clicked.connect(self._choose_media)
+        layout.addWidget(self.top_import_button)
+        self.undo_button = QPushButton("撤销")
+        self.undo_button.setObjectName("quietAction")
+        self.undo_button.setToolTip("撤销  Ctrl+Z")
+        self.undo_button.setEnabled(False)
+        self.undo_button.clicked.connect(self.undo_stack.undo)
+        self.undo_stack.canUndoChanged.connect(self.undo_button.setEnabled)
+        layout.addWidget(self.undo_button)
+        self.redo_button = QPushButton("重做")
+        self.redo_button.setObjectName("quietAction")
+        self.redo_button.setToolTip("重做  Ctrl+Shift+Z")
+        self.redo_button.setEnabled(False)
+        self.redo_button.clicked.connect(self.undo_stack.redo)
+        self.undo_stack.canRedoChanged.connect(self.redo_button.setEnabled)
+        layout.addWidget(self.redo_button)
+        help_button = QPushButton("快捷键")
         help_button.setObjectName("quietAction")
         help_button.setToolTip("快捷键")
         help_button.clicked.connect(self._show_shortcuts)
@@ -520,11 +537,17 @@ class MainWindow(QMainWindow):
     def _show_empty_workspace(self) -> None:
         if hasattr(self, "workspace_stack"):
             self.workspace_stack.setCurrentIndex(0)
-            self.sidebar_button.setEnabled(False)
+            self.sidebar_button.hide()
+            self.timecode_label.hide()
+            self.undo_button.hide()
+            self.redo_button.hide()
 
     def _show_workspace(self) -> None:
         self.workspace_stack.setCurrentIndex(1)
-        self.sidebar_button.setEnabled(True)
+        self.sidebar_button.show()
+        self.timecode_label.show()
+        self.undo_button.show()
+        self.redo_button.show()
 
     def _toggle_sidebar(self) -> None:
         if not self.project.assets:
@@ -570,41 +593,56 @@ class MainWindow(QMainWindow):
 
     def _build_library_panel(self) -> QWidget:
         frame, layout = self._panel()
-        label = QLabel("素材库")
-        label.setObjectName("title")
-        layout.addWidget(label)
+        frame.setObjectName("libraryPanel")
+        layout.setContentsMargins(10, 10, 10, 10)
+        self.library_tabs = QTabWidget()
+        self.library_tabs.setObjectName("libraryTabs")
+
+        media_page = QWidget()
+        media_layout = QVBoxLayout(media_page)
+        media_layout.setContentsMargins(0, 8, 0, 0)
+        media_layout.setSpacing(8)
         self.asset_list = DropListWidget()
         self.asset_list.files_dropped.connect(
             lambda paths: self.import_paths(paths, activate=False)
         )
         self.asset_list.currentRowChanged.connect(self._activate_asset_row)
-        layout.addWidget(self.asset_list, 3)
-        add_media = QPushButton("＋ 导入音视频")
+        media_layout.addWidget(self.asset_list, 1)
+        add_media = QPushButton("导入音视频")
+        add_media.setObjectName("secondaryAction")
         add_media.clicked.connect(self._choose_media)
-        layout.addWidget(add_media)
-        label = QLabel("字幕轨")
-        label.setObjectName("eyebrow")
-        layout.addWidget(label)
+        media_layout.addWidget(add_media)
+        self.library_tabs.addTab(media_page, "素材")
+
+        subtitle_page = QWidget()
+        subtitle_layout = QVBoxLayout(subtitle_page)
+        subtitle_layout.setContentsMargins(0, 8, 0, 0)
+        subtitle_layout.setSpacing(8)
         self.subtitle_tree = QTreeWidget()
-        self.subtitle_tree.setHeaderLabels(["显示 / 轨道", "条目"])
+        self.subtitle_tree.setHeaderLabels(["轨道", "条目"])
         self.subtitle_tree.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
         self.subtitle_tree.itemClicked.connect(self._subtitle_tree_clicked)
-        layout.addWidget(self.subtitle_tree, 2)
+        subtitle_layout.addWidget(self.subtitle_tree, 1)
         subtitle_actions = QHBoxLayout()
-        add_subtitle = QPushButton("＋ 添加字幕轨")
+        add_subtitle = QPushButton("添加字幕")
+        add_subtitle.setObjectName("secondaryAction")
         add_subtitle.clicked.connect(self._choose_subtitle)
         subtitle_actions.addWidget(add_subtitle)
-        export_subtitle_button = QPushButton("导出完整字幕")
+        export_subtitle_button = QPushButton("导出字幕")
+        export_subtitle_button.setObjectName("quietAction")
         export_subtitle_button.clicked.connect(self._export_subtitle_track)
         subtitle_actions.addWidget(export_subtitle_button)
-        layout.addLayout(subtitle_actions)
+        subtitle_layout.addLayout(subtitle_actions)
+        self.library_tabs.addTab(subtitle_page, "字幕")
+        layout.addWidget(self.library_tabs, 1)
         return frame
 
     def _build_preview_panel(self) -> QWidget:
         frame, layout = self._panel()
         frame.setObjectName("previewPanel")
+        layout.setContentsMargins(12, 10, 12, 10)
         header = QHBoxLayout()
-        label = QLabel("预览")
+        label = QLabel("素材预览")
         label.setObjectName("title")
         header.addWidget(label)
         self.video_preview_button = QPushButton("视频")
@@ -625,7 +663,7 @@ class MainWindow(QMainWindow):
         header.addWidget(self.waveform_preview_button)
         header.addStretch()
         self.media_info = QLabel("NO MEDIA")
-        self.media_info.setObjectName("eyebrow")
+        self.media_info.setObjectName("muted")
         header.addWidget(self.media_info)
         layout.addLayout(header)
         self.audio_preview = AudioPreview()
@@ -636,11 +674,17 @@ class MainWindow(QMainWindow):
         self.player_widget.backend_changed.connect(self._playback_backend_changed)
         layout.addWidget(self.player_widget, 1)
         transport = QHBoxLayout()
-        self.play_button = QPushButton("播放")
+        self.play_button = QPushButton("播放  Space")
+        self.play_button.setObjectName("secondaryAction")
         self.play_button.setToolTip("播放 / 暂停  Space")
         self.play_button.clicked.connect(self._toggle_playback)
         transport.addWidget(self.play_button)
-        for text, delta in (("−5s", -5000), ("−1s", -1000), ("+1s", 1000), ("+5s", 5000)):
+        for text, delta in (
+            ("−5 秒", -5000),
+            ("−1 秒", -1000),
+            ("+1 秒", 1000),
+            ("+5 秒", 5000),
+        ):
             button = QPushButton(text)
             button.setObjectName("quietAction")
             button.clicked.connect(lambda _checked=False, value=delta: self._seek_relative(value))
@@ -653,12 +697,13 @@ class MainWindow(QMainWindow):
 
     def _build_inspector_panel(self) -> QWidget:
         frame, layout = self._panel()
+        frame.setObjectName("propertyDrawer")
         header = QHBoxLayout()
         title = QLabel("片段属性")
         title.setObjectName("title")
         header.addWidget(title)
         header.addStretch()
-        close_button = QPushButton("×")
+        close_button = QPushButton("关闭")
         close_button.setObjectName("quietAction")
         close_button.setToolTip("关闭属性")
         close_button.clicked.connect(frame.hide)
@@ -927,6 +972,9 @@ class MainWindow(QMainWindow):
         advanced_action = QAction("设置…", self)
         advanced_action.triggered.connect(self._show_advanced_settings)
         menu.addAction(advanced_action)
+        self.file_menu = menu
+        self.project_menu_button.setMenu(menu)
+        self.menuBar().hide()
         QApplication.instance().focusChanged.connect(self._update_single_key_shortcuts)
 
     def _update_single_key_shortcuts(self, _old: QWidget | None, now: QWidget | None) -> None:
@@ -1156,7 +1204,9 @@ class MainWindow(QMainWindow):
         self.subtitle_tree.clear()
         asset = self.project.active_asset
         if not asset:
+            self.library_tabs.setTabText(1, "字幕")
             return
+        self.library_tabs.setTabText(1, f"字幕  {len(asset.subtitle_tracks)}")
         for track in asset.subtitle_tracks:
             item = QTreeWidgetItem([track.name, str(len(track.cues))])
             item.setData(0, Qt.ItemDataRole.UserRole, track.id)
@@ -2839,6 +2889,9 @@ class MainWindow(QMainWindow):
         self.setWindowTitle(f"{'*' if self.dirty else ''}{name} — TTS Dataset Studio")
         if hasattr(self, "project_title_label"):
             self.project_title_label.setText(f"{'• ' if self.dirty else ''}{name}")
+        if hasattr(self, "library_tabs"):
+            count = len(self.project.assets)
+            self.library_tabs.setTabText(0, f"素材  {count}" if count else "素材")
 
     def _confirm_discard(self) -> bool:
         if not self.dirty:

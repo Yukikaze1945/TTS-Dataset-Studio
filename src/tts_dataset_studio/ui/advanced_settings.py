@@ -14,14 +14,17 @@ from PySide6.QtWidgets import (
     QDoubleSpinBox,
     QFileDialog,
     QFormLayout,
+    QFrame,
     QHBoxLayout,
     QLabel,
     QLineEdit,
+    QListWidget,
     QMessageBox,
     QPlainTextEdit,
     QPushButton,
     QScrollArea,
     QSpinBox,
+    QStackedWidget,
     QTabWidget,
     QVBoxLayout,
     QWidget,
@@ -47,15 +50,49 @@ class AdvancedSettingsDialog(QDialog):
         self.engine_states = engine_states or {}
         self.settings_value = AppSettings.load(store)
         self.setWindowTitle("设置")
-        self.resize(760, 650)
+        self.setMinimumSize(780, 580)
+        self.resize(880, 680)
         layout = QVBoxLayout(self)
-        tabs = QTabWidget()
-        tabs.addTab(self._build_general_tab(), "常规与外观")
-        tabs.addTab(self._build_save_tab(), "导出与命名")
-        tabs.addTab(self._build_tools_tab(), "播放与时间线")
-        tabs.addTab(self._build_subtitle_tab(), "字幕")
-        tabs.addTab(self._build_ai_tab(), "AI 引擎")
-        layout.addWidget(tabs)
+        layout.setContentsMargins(20, 18, 20, 16)
+        layout.setSpacing(14)
+
+        title = QLabel("设置")
+        title.setObjectName("settingsTitle")
+        layout.addWidget(title)
+        description = QLabel("常用选项保持简单；引擎路径、编码与缓存参数按分类集中管理。")
+        description.setObjectName("muted")
+        layout.addWidget(description)
+
+        body = QHBoxLayout()
+        body.setSpacing(14)
+        navigation = QFrame()
+        navigation.setObjectName("settingsNav")
+        navigation.setFixedWidth(190)
+        navigation_layout = QVBoxLayout(navigation)
+        navigation_layout.setContentsMargins(6, 6, 6, 6)
+        self.settings_nav = QListWidget()
+        self.settings_nav.setObjectName("settingsNavList")
+        self.settings_nav.addItems(
+            ["常规与外观", "导出与命名", "播放与时间线", "字幕", "AI 引擎"]
+        )
+        navigation_layout.addWidget(self.settings_nav)
+        body.addWidget(navigation)
+
+        self.settings_stack = QStackedWidget()
+        for page in (
+            self._build_general_tab(),
+            self._build_save_tab(),
+            self._build_tools_tab(),
+            self._build_subtitle_tab(),
+            self._build_ai_tab(),
+        ):
+            self.settings_stack.addWidget(page)
+        self.settings_nav.currentRowChanged.connect(
+            self.settings_stack.setCurrentIndex
+        )
+        self.settings_nav.setCurrentRow(0)
+        body.addWidget(self.settings_stack, 1)
+        layout.addLayout(body, 1)
         buttons = QDialogButtonBox(
             QDialogButtonBox.StandardButton.Ok
             | QDialogButtonBox.StandardButton.Apply
@@ -67,6 +104,12 @@ class AdvancedSettingsDialog(QDialog):
         buttons.button(QDialogButtonBox.StandardButton.Apply).clicked.connect(self._apply)
         buttons.button(QDialogButtonBox.StandardButton.RestoreDefaults).clicked.connect(
             self._restore_defaults
+        )
+        buttons.button(QDialogButtonBox.StandardButton.Ok).setText("确定")
+        buttons.button(QDialogButtonBox.StandardButton.Apply).setText("应用")
+        buttons.button(QDialogButtonBox.StandardButton.Cancel).setText("取消")
+        buttons.button(QDialogButtonBox.StandardButton.RestoreDefaults).setText(
+            "恢复默认"
         )
         layout.addWidget(buttons)
         self._load(self.settings_value)
