@@ -5,7 +5,7 @@ import subprocess
 from dataclasses import replace
 from pathlib import Path
 
-from PySide6.QtCore import QSettings, Signal
+from PySide6.QtCore import QSettings, Qt, Signal
 from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
@@ -33,19 +33,28 @@ from tts_dataset_studio.services.media import ToolPaths
 
 class AdvancedSettingsDialog(QDialog):
     settings_applied = Signal(object)
+    unload_asr_requested = Signal()
+    unload_tts_requested = Signal()
 
-    def __init__(self, store: QSettings, parent=None) -> None:
+    def __init__(
+        self,
+        store: QSettings,
+        parent=None,
+        engine_states: dict[str, str] | None = None,
+    ) -> None:
         super().__init__(parent)
         self.store = store
+        self.engine_states = engine_states or {}
         self.settings_value = AppSettings.load(store)
-        self.setWindowTitle("高级设置")
-        self.resize(720, 610)
+        self.setWindowTitle("设置")
+        self.resize(760, 650)
         layout = QVBoxLayout(self)
         tabs = QTabWidget()
-        tabs.addTab(self._build_save_tab(), "保存与命名")
-        tabs.addTab(self._build_tools_tab(), "播放与工具")
-        tabs.addTab(self._build_asr_tab(), "ASR")
-        tabs.addTab(self._build_index_tts_tab(), "语音引擎")
+        tabs.addTab(self._build_general_tab(), "常规与外观")
+        tabs.addTab(self._build_save_tab(), "导出与命名")
+        tabs.addTab(self._build_tools_tab(), "播放与时间线")
+        tabs.addTab(self._build_subtitle_tab(), "字幕")
+        tabs.addTab(self._build_ai_tab(), "AI 引擎")
         layout.addWidget(tabs)
         buttons = QDialogButtonBox(
             QDialogButtonBox.StandardButton.Ok
@@ -62,6 +71,19 @@ class AdvancedSettingsDialog(QDialog):
         layout.addWidget(buttons)
         self._load(self.settings_value)
 
+    def _build_general_tab(self) -> QWidget:
+        tab = QWidget()
+        form = QFormLayout(tab)
+        self.theme = QComboBox()
+        self.theme.addItem("跟随 Windows", "system")
+        self.theme.addItem("浅色", "light")
+        self.theme.addItem("深色", "dark")
+        note = QLabel("主题在点击“应用”后立即生效。界面布局会随窗口宽度自动调整。")
+        note.setWordWrap(True)
+        form.addRow("外观主题", self.theme)
+        form.addRow("", note)
+        return tab
+
     def _path_row(self, edit: QLineEdit) -> QWidget:
         row = QWidget()
         layout = QHBoxLayout(row)
@@ -71,6 +93,16 @@ class AdvancedSettingsDialog(QDialog):
         button.clicked.connect(lambda: self._choose_folder(edit))
         layout.addWidget(button)
         return row
+
+    def _scroll_page(self, content: QWidget) -> QScrollArea:
+        scroll = QScrollArea()
+        scroll.setFrameShape(QScrollArea.Shape.NoFrame)
+        scroll.setWidgetResizable(True)
+        scroll.setHorizontalScrollBarPolicy(
+            Qt.ScrollBarPolicy.ScrollBarAlwaysOff
+        )
+        scroll.setWidget(content)
+        return scroll
 
     def _build_save_tab(self) -> QWidget:
         tab = QWidget()
@@ -88,18 +120,61 @@ class AdvancedSettingsDialog(QDialog):
         self.jpeg_quality = QSpinBox()
         self.jpeg_quality.setRange(1, 100)
         self.audio_template = QLineEdit()
+        self.export_format = QComboBox()
+        self.export_format.addItems(["wav", "flac", "mp3"])
+        self.export_sample_rate = QComboBox()
+        for label, rate in (
+            ("原始", 0),
+            ("16 kHz", 16000),
+            ("22.05 kHz", 22050),
+            ("24 kHz", 24000),
+            ("32 kHz", 32000),
+            ("44.1 kHz", 44100),
+            ("48 kHz", 48000),
+        ):
+            self.export_sample_rate.addItem(label, rate)
+        self.export_channels = QComboBox()
+        self.export_channels.addItem("原始", 0)
+        self.export_channels.addItem("单声道", 1)
+        self.export_channels.addItem("立体声", 2)
+        self.export_codec = QComboBox()
+        self.export_codec.addItems(
+            ["pcm_s16le", "pcm_s24le", "pcm_s32le", "pcm_f32le"]
+        )
+        self.export_txt = QCheckBox("生成同名 UTF-8 TXT")
+        self.export_normalize = QCheckBox("峰值归一化至 -1 dBFS")
+        self.export_fade_in = QSpinBox()
+        self.export_fade_in.setRange(0, 5000)
+        self.export_fade_in.setSuffix(" ms")
+        self.export_fade_out = QSpinBox()
+        self.export_fade_out.setRange(0, 5000)
+        self.export_fade_out.setSuffix(" ms")
+        self.export_regex = QLineEdit()
+        self.export_regex_replacement = QLineEdit()
         self.still_template = QLineEdit()
         self.open_after = QCheckBox("导出后打开文件夹")
+        self.confirm_before_export = QCheckBox("导出前显示确认面板")
         form.addRow("音频默认位置", self.audio_mode)
         form.addRow("音频自定义目录", self._path_row(self.audio_dir))
         form.addRow("静帧默认位置", self.still_mode)
         form.addRow("静帧自定义目录", self._path_row(self.still_dir))
         form.addRow("静帧格式", self.still_format)
         form.addRow("JPEG 质量", self.jpeg_quality)
+        form.addRow("音频格式", self.export_format)
+        form.addRow("采样率", self.export_sample_rate)
+        form.addRow("声道", self.export_channels)
+        form.addRow("WAV 编码", self.export_codec)
+        form.addRow("", self.export_txt)
+        form.addRow("", self.export_normalize)
+        form.addRow("淡入", self.export_fade_in)
+        form.addRow("淡出", self.export_fade_out)
         form.addRow("音频命名模板", self.audio_template)
+        form.addRow("源名正则", self.export_regex)
+        form.addRow("替换文本", self.export_regex_replacement)
         form.addRow("静帧命名模板", self.still_template)
+        form.addRow("", self.confirm_before_export)
         form.addRow("", self.open_after)
-        return tab
+        return self._scroll_page(tab)
 
     def _build_tools_tab(self) -> QWidget:
         tab = QWidget()
@@ -122,7 +197,24 @@ class AdvancedSettingsDialog(QDialog):
         form.addRow("拖动预览频率", self.scrub_hz)
         form.addRow("", self.follow_playhead)
         form.addRow("缓存目录", self._path_row(self.cache_dir))
+        return self._scroll_page(tab)
+
+    def _build_subtitle_tab(self) -> QWidget:
+        tab = QWidget()
+        form = QFormLayout(tab)
+        note = QLabel(
+            "外部字幕与视频内嵌字幕会自动加入素材侧栏。"
+            "导出字幕轨、显示状态和文本编辑属于工程设置，会随 .ttds 保存。"
+        )
+        note.setWordWrap(True)
+        form.addRow("自动检测", note)
         return tab
+
+    def _build_ai_tab(self) -> QWidget:
+        tabs = QTabWidget()
+        tabs.addTab(self._build_asr_tab(), "语音识别")
+        tabs.addTab(self._build_index_tts_tab(), "语音生成")
+        return tabs
 
     def _build_asr_tab(self) -> QWidget:
         tab = QWidget()
@@ -143,6 +235,10 @@ class AdvancedSettingsDialog(QDialog):
         self.moss_temp = QLineEdit()
         self.track_name = QLineEdit()
         self.unload_on_exit = QCheckBox("退出程序时卸载模型")
+        asr_state = QLabel(self._engine_status_text(self.engine_states.get("asr")))
+        unload_button = QPushButton("卸载语音识别模型")
+        unload_button.setEnabled(self.engine_states.get("asr") == "loaded")
+        unload_button.clicked.connect(self.unload_asr_requested)
         test_button = QPushButton("检测环境")
         test_button.clicked.connect(self._test_asr_environment)
         form.addRow("MOSS 安装目录", self._path_row(self.moss_root))
@@ -156,6 +252,8 @@ class AdvancedSettingsDialog(QDialog):
         form.addRow("临时目录", self._path_row(self.moss_temp))
         form.addRow("字幕轨名称", self.track_name)
         form.addRow("", self.unload_on_exit)
+        form.addRow("当前状态", asr_state)
+        form.addRow("", unload_button)
         form.addRow("", test_button)
         return tab
 
@@ -195,6 +293,10 @@ class AdvancedSettingsDialog(QDialog):
         self.index_silence.setSuffix(" ms")
         self.index_temp = QLineEdit()
         self.index_unload_on_exit = QCheckBox("退出程序时卸载语音引擎")
+        tts_state = QLabel(self._engine_status_text(self.engine_states.get("tts")))
+        unload_button = QPushButton("卸载语音生成引擎")
+        unload_button.setEnabled(self.engine_states.get("tts") == "loaded")
+        unload_button.clicked.connect(self.unload_tts_requested)
         test_button = QPushButton("检测 IndexTTS2 环境")
         test_button.clicked.connect(self._test_index_tts_environment)
         form.addRow("IndexTTS 安装目录", self._path_row(self.index_root))
@@ -217,11 +319,22 @@ class AdvancedSettingsDialog(QDialog):
         form.addRow("段间静音", self.index_silence)
         form.addRow("临时目录", self._path_row(self.index_temp))
         form.addRow("", self.index_unload_on_exit)
+        form.addRow("当前状态", tts_state)
+        form.addRow("", unload_button)
         form.addRow("", test_button)
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
         scroll.setWidget(tab)
         return scroll
+
+    @staticmethod
+    def _engine_status_text(state: str | None) -> str:
+        return {
+            "loaded": "已加载",
+            "loading": "加载中",
+            "unloading": "卸载中",
+            "error": "加载失败",
+        }.get(state or "", "未加载")
 
     def _choose_folder(self, edit: QLineEdit) -> None:
         folder = QFileDialog.getExistingDirectory(self, "选择目录", edit.text())
@@ -229,6 +342,8 @@ class AdvancedSettingsDialog(QDialog):
             edit.setText(folder)
 
     def _load(self, value: AppSettings) -> None:
+        self.theme.setCurrentIndex(self.theme.findData(value.theme))
+        self.confirm_before_export.setChecked(value.confirm_before_export)
         self.audio_mode.setCurrentIndex(self.audio_mode.findData(value.audio_output_mode))
         self.audio_dir.setText(value.audio_output_dir)
         self.still_mode.setCurrentIndex(self.still_mode.findData(value.still_output_mode))
@@ -236,6 +351,20 @@ class AdvancedSettingsDialog(QDialog):
         self.still_format.setCurrentText(value.still_format)
         self.jpeg_quality.setValue(value.jpeg_quality)
         self.audio_template.setText(value.audio_naming_template)
+        self.export_format.setCurrentText(value.export_container)
+        self.export_sample_rate.setCurrentIndex(
+            max(0, self.export_sample_rate.findData(value.export_sample_rate))
+        )
+        self.export_channels.setCurrentIndex(
+            max(0, self.export_channels.findData(value.export_channels))
+        )
+        self.export_codec.setCurrentText(value.export_codec)
+        self.export_txt.setChecked(value.export_write_txt)
+        self.export_normalize.setChecked(value.export_peak_normalize)
+        self.export_fade_in.setValue(value.export_fade_in_ms)
+        self.export_fade_out.setValue(value.export_fade_out_ms)
+        self.export_regex.setText(value.export_regex_pattern)
+        self.export_regex_replacement.setText(value.export_regex_replacement)
         self.still_template.setText(value.still_naming_template)
         self.open_after.setChecked(value.open_after_export)
         self.scrub_hz.setValue(value.scrub_hz)
@@ -276,6 +405,8 @@ class AdvancedSettingsDialog(QDialog):
     def value(self) -> AppSettings:
         return replace(
             self.settings_value,
+            theme=str(self.theme.currentData()),
+            confirm_before_export=self.confirm_before_export.isChecked(),
             audio_output_mode=str(self.audio_mode.currentData()),
             audio_output_dir=self.audio_dir.text().strip(),
             still_output_mode=str(self.still_mode.currentData()),
@@ -283,6 +414,16 @@ class AdvancedSettingsDialog(QDialog):
             still_format=self.still_format.currentText(),
             jpeg_quality=self.jpeg_quality.value(),
             audio_naming_template=self.audio_template.text().strip(),
+            export_container=self.export_format.currentText(),
+            export_sample_rate=int(self.export_sample_rate.currentData()),
+            export_channels=int(self.export_channels.currentData()),
+            export_codec=self.export_codec.currentText(),
+            export_write_txt=self.export_txt.isChecked(),
+            export_peak_normalize=self.export_normalize.isChecked(),
+            export_fade_in_ms=self.export_fade_in.value(),
+            export_fade_out_ms=self.export_fade_out.value(),
+            export_regex_pattern=self.export_regex.text(),
+            export_regex_replacement=self.export_regex_replacement.text(),
             still_naming_template=self.still_template.text().strip(),
             open_after_export=self.open_after.isChecked(),
             scrub_hz=self.scrub_hz.value(),

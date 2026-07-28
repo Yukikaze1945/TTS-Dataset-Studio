@@ -6,7 +6,7 @@ TTS Dataset Studio is a lightweight Windows workstation for extracting TTS-ready
 clips and editing their subtitles. It combines media import, waveform preview, multiple
 subtitle tracks, non-destructive regions, gain control, and FFmpeg export in one interface.
 
-> Current version: `v0.1.0-alpha.1`. This is a prerelease; save projects before important work.
+> Current version: `v0.2.0-alpha.1`. This is a prerelease; save projects before important work.
 
 ## Highlights
 
@@ -20,7 +20,11 @@ subtitle tracks, non-destructive regions, gain control, and FFmpeg export in one
 
 ## Install
 
-Download `TTS-Dataset-Studio-*-windows-x64.zip` from
+For most users, download `TTS-Dataset-Studio-*-setup-x64.exe` from
+[Releases](https://github.com/Yukikaze1945/TTS-Dataset-Studio/releases). The installer can add
+Start Menu, desktop, and media-file context-menu entries.
+
+Alternatively, download `TTS-Dataset-Studio-*-windows-x64.zip` from
 [Releases](https://github.com/Yukikaze1945/TTS-Dataset-Studio/releases), extract it, and run
 `TTS Dataset Studio.exe`. FFmpeg, ffprobe, and mpv are included.
 
@@ -66,7 +70,7 @@ MOSS, PyTorch, and model weights are not distributed with this project. Install
 
 1. Set `MOSS_TRANSCRIBE_DIARIZE_HOME`.
 2. Place it at `moss-asr\MOSS-Transcribe-Diarize` on any Windows drive.
-3. Select its directory, Python environment, and model under Advanced Settings → ASR.
+3. Select its directory, Python environment, and model under Settings → AI Engines → ASR.
 
 ## Optional IndexTTS2 speech engine
 
@@ -76,8 +80,8 @@ build. The application discovers an external installation through `INDEX_TTS_HOM
 Speech Engine. A typical installation contains `.venv\Scripts\python.exe`,
 `indextts\infer_v2.py`, and `checkpoints\config.yaml`.
 
-After loading the engine, select an export subtitle track and one or more regions, then press
-`G`. Each region's untreated source audio is used as its own reference. Results are inserted into
+Select an export subtitle track and one or more regions, then press `G`; the engine loads on
+demand. Each region's untreated source audio is used as its own reference. Results are inserted into
 the editable **AI Generated** track, which supports moving, non-destructive trimming, deletion,
 undo/redo, and Mute/Solo synchronized monitoring. Saved projects store generated WAV files under
 the matching `.ttds.assets/generated` directory.
@@ -95,7 +99,7 @@ uv sync --extra dev --frozen
 uv run ruff check src tests
 uv run pytest
 .\scripts\fetch-runtime.ps1
-.\scripts\build-release.ps1 -Version 0.1.0-alpha.1
+.\scripts\build-release.ps1 -Version 0.2.0-alpha.1
 ```
 
 ## Known limitations

@@ -6,7 +6,7 @@ TTS Dataset Studio 是一个面向 Windows 的轻量 TTS 素材截取与字幕�
 它把音视频导入、波形预览、多字幕轨、非破坏区间、增益控制和 FFmpeg 导出放在
 同一个界面中，目标是让“随手截一句可训练语音”不再需要启动完整视频剪辑软件。
 
-> 当前版本：`v0.1.0-alpha.1`。这是预发布版本，请在重要操作前保存工程。
+> 当前版本：`v0.2.0-alpha.1`。这是预发布版本，请在重要操作前保存工程。
 
 ## 主要功能
 
@@ -19,6 +19,12 @@ TTS Dataset Studio 是一个面向 Windows 的轻量 TTS 素材截取与字幕�
 - 可选接入 MOSS-Transcribe-Diarize，对选中区间生成时间戳和说话人字幕。
 
 ## 安装
+
+### Windows 安装包（推荐）
+
+从 [Releases](https://github.com/Yukikaze1945/TTS-Dataset-Studio/releases) 下载
+`TTS-Dataset-Studio-*-setup-x64.exe`。安装向导可创建桌面/开始菜单快捷方式，
+并可选加入音视频文件右键菜单。
 
 ### Windows 便携版
 
@@ -48,7 +54,7 @@ uv run tts-dataset-studio
 
 1. 将视频或音频拖入素材库或时间轴。
 2. 点击字幕，或使用 `I` / `O` 创建导出区间。
-3. 拖动字幕或区间边缘修正时间；在右侧调整增益和导出预设。
+3. 拖动字幕或区间边缘修正时间；需要时展开片段属性，完整参数位于“设置”。
 4. 按 `E` 导出音频和可选 TXT。
 5. 使用 `Ctrl+S` 保存 `.ttds` 工程；原媒体和原字幕不会被修改。
 
@@ -77,9 +83,9 @@ MOSS、PyTorch 和模型权重不包含在仓库或便携包中。准备好
 
 1. 设置环境变量 `MOSS_TRANSCRIBE_DIARIZE_HOME`。
 2. 放在任意磁盘的 `moss-asr\MOSS-Transcribe-Diarize`。
-3. 在“文件 → 高级设置 → ASR”中手动选择目录、Python 和模型。
+3. 在“设置 → AI 引擎 → 语音识别”中手动选择目录、Python 和模型。
 
-加载模型后，选择一个或多个导出区间并点击“识别选中片段”。取消识别不会卸载模型。
+选择一个或多个导出区间并点击“识别字幕”，软件会按需加载模型。取消识别不会卸载模型。
 
 ## IndexTTS2 语音引擎（可选）
 
@@ -88,7 +94,7 @@ IndexTTS2、PyTorch、CUDA 和模型权重不会上传到仓库，也不会打�
 1. 环境变量 `INDEX_TTS_HOME`。
 2. 用户目录或程序相邻目录下的 `index-tts`。
 3. Windows 固定磁盘根目录下的 `index-tts`。
-4. “文件 → 高级设置 → 语音引擎”中手动指定的目录。
+4. “设置 → AI 引擎 → 语音生成”中手动指定的目录。
 
 默认环境布局为：
 
@@ -99,7 +105,7 @@ index-tts/
 └── checkpoints/config.yaml
 ```
 
-加载语音引擎后，指定一个导出字幕轨并选择一个或多个区间，按 `G` 即可用每个区间的原始声音作为参考音频生成语音。生成结果会加入“AI 生成”音轨；该音轨支持移动、非破坏裁边、删除、撤销/重做以及 Mute/Solo 同步试听。工程保存后，生成文件位于同名 `.ttds.assets/generated` 目录。
+指定一个导出字幕轨并选择一个或多个区间，按 `G` 即可按需加载引擎，并用每个区间的原始声音作为参考音频生成语音。生成结果会加入“AI 生成”音轨；该音轨支持移动、非破坏裁边、删除、撤销/重做以及 Mute/Solo 同步试听。工程保存后，生成文件位于同名 `.ttds.assets/generated` 目录。
 
 可执行本机 GPU 冒烟测试：
 
@@ -115,11 +121,11 @@ uv run ruff check src tests
 uv run pytest
 ```
 
-构建完整便携包：
+构建安装包与便携包（需要 Inno Setup 6）：
 
 ```powershell
 .\scripts\fetch-runtime.ps1
-.\scripts\build-release.ps1 -Version 0.1.0-alpha.1
+.\scripts\build-release.ps1 -Version 0.2.0-alpha.1
 ```
 
 ## 已知限制

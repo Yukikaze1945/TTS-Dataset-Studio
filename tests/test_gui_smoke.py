@@ -3,7 +3,13 @@ from PySide6.QtCore import Qt
 from PySide6.QtGui import QAction
 from PySide6.QtWidgets import QFormLayout, QScrollArea
 
-from tts_dataset_studio.domain.models import MediaAsset, Project, SubtitleCue, SubtitleTrack
+from tts_dataset_studio.domain.models import (
+    ExportRegion,
+    MediaAsset,
+    Project,
+    SubtitleCue,
+    SubtitleTrack,
+)
 from tts_dataset_studio.services.media import ToolPaths
 from tts_dataset_studio.ui.main_window import MainWindow
 
@@ -23,7 +29,9 @@ def test_main_window_builds(qtbot) -> None:
     assert shortcuts["上一帧"] == "D"
     assert shortcuts["下一帧"] == "F"
     assert shortcuts["保存原视频静帧"] == "C"
-    assert any(action.text() == "高级设置…" for action in window.findChildren(QAction))
+    assert any(action.text() == "设置…" for action in window.findChildren(QAction))
+    assert window.workspace_stack.currentWidget() is window.empty_workspace
+    assert not window.context_bar.isVisible()
 
 
 def test_export_settings_scroll_and_wrap_in_narrow_inspector(qtbot) -> None:
@@ -106,6 +114,28 @@ def test_clicking_cue_creates_visible_selection_and_inspector_gain_sync(qtbot) -
     assert "1.400s" in window.selection_status.text()
     assert asset.gain_db == -6.0
     assert window.gain_spin.value() == -6.0
+    assert not window.context_bar.isHidden()
+    assert not window.context_bar.export_button.isHidden()
+    window.dirty = False
+
+
+def test_asr_action_loads_engine_on_demand(qtbot, monkeypatch) -> None:
+    window = MainWindow()
+    qtbot.addWidget(window)
+    asset = MediaAsset("audio.wav", "audio.wav", duration_ms=5000)
+    window.project = Project(assets=[asset], active_asset_id=asset.id)
+    region = window.project.active_asset.regions
+    selected = ExportRegion(500, 1500)
+    region.append(selected)
+    window._apply_region_selection(selected.id, False, True)
+    loaded = []
+    monkeypatch.setattr(window.asr, "load_model", lambda settings: loaded.append(settings))
+
+    window._toggle_asr_transcription()
+
+    assert loaded == [window.app_settings]
+    assert window._asr_pending_start
+    assert not window.task_notice.isHidden()
     window.dirty = False
 
 
@@ -150,6 +180,23 @@ def test_missing_asset_stays_offline_without_starting_player(qtbot, tmp_path) ->
     assert "MISSING MEDIA" in window.media_info.text()
     assert "OFFLINE" in window.status_message.text()
     assert window.player_widget._current_path is None
+    assert window.workspace_stack.currentIndex() == 1
+    window.dirty = False
+
+
+def test_narrow_workspace_collapses_library(qtbot, tmp_path) -> None:
+    window = MainWindow()
+    qtbot.addWidget(window)
+    missing = tmp_path / "audio.wav"
+    asset = MediaAsset(str(missing), missing.name, duration_ms=5000)
+    window.project = Project(assets=[asset], active_asset_id=asset.id)
+    window._activate_asset(asset)
+    window.show()
+    window.resize(1024, 720)
+    qtbot.wait(20)
+
+    assert window.library_panel.isHidden()
+    assert window.context_bar.isHidden()
     window.dirty = False
 
 

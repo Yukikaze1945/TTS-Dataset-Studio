@@ -27,7 +27,18 @@ jobs:
         run: |
           uv run ruff check src tests
           uv run pytest -vv --timeout=30
-      - name: Build portable Windows archive
+      - name: Verify tag belongs to release/github
+        shell: pwsh
+        run: |
+          git fetch origin release/github
+          git merge-base --is-ancestor $env:GITHUB_SHA origin/release/github
+          if ($LASTEXITCODE -ne 0) {
+            throw "Release tags must point to a commit on release/github."
+          }
+      - name: Install Inno Setup
+        shell: pwsh
+        run: choco install innosetup -y --no-progress
+      - name: Build Windows installer and portable archive
         shell: pwsh
         run: |
           $version = "${{ github.ref_name }}".TrimStart("v")
@@ -39,4 +50,5 @@ jobs:
           generate_release_notes: true
           files: |
             release/TTS-Dataset-Studio-${{ github.ref_name }}-windows-x64.zip
+            release/TTS-Dataset-Studio-${{ github.ref_name }}-setup-x64.exe
             release/SHA256SUMS.txt

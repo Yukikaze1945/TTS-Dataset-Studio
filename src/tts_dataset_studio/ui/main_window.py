@@ -26,6 +26,7 @@ from PySide6.QtGui import (
     QDragEnterEvent,
     QDropEvent,
     QKeySequence,
+    QResizeEvent,
     QUndoStack,
 )
 from PySide6.QtWidgets import (
@@ -50,6 +51,7 @@ from PySide6.QtWidgets import (
     QSlider,
     QSpinBox,
     QSplitter,
+    QStackedWidget,
     QStatusBar,
     QTabWidget,
     QTreeWidget,
@@ -99,12 +101,19 @@ from tts_dataset_studio.ui.commands import (
     TimeRangeCommand,
 )
 from tts_dataset_studio.ui.player import PlayerWidget
+from tts_dataset_studio.ui.theme import build_stylesheet
 from tts_dataset_studio.ui.timeline import (
     TimelineCanvas,
     TimelineScrollArea,
     WaveformDbScale,
 )
 from tts_dataset_studio.ui.widgets import AudioPreview, DropListWidget
+from tts_dataset_studio.ui.workspace import (
+    ContextActionBar,
+    EmptyWorkspace,
+    TaskNoticeBar,
+    WorkspaceState,
+)
 
 LOGGER = logging.getLogger(__name__)
 
@@ -311,11 +320,13 @@ class MainWindow(QMainWindow):
     def __init__(self) -> None:
         super().__init__()
         self.project = Project()
+        self.workspace_state = WorkspaceState(self)
         self.settings = QSettings("OpenAI", "TTS Dataset Studio")
         self.app_settings = AppSettings.load(self.settings)
         self.project.active_preset.naming_template = (
             self.app_settings.audio_naming_template
         )
+        self._apply_export_settings_to_preset()
         self.thread_pool = QThreadPool.globalInstance()
         self.waveforms: dict[str, list[float]] = {}
         self.generated_waveforms: dict[str, list[float]] = {}
@@ -331,6 +342,7 @@ class MainWindow(QMainWindow):
         self.asr = AsrController(self)
         self.index_tts = IndexTtsController(self)
         self._asr_busy = False
+        self._asr_pending_start = False
         self._asr_cancel_requested = False
         self._asr_extracting = False
         self._asr_queue: list[tuple[ExportRegion, Path]] = []
@@ -339,6 +351,7 @@ class MainWindow(QMainWindow):
         self._asr_asset_id: str | None = None
         self._asr_temp_folder: Path | None = None
         self._tts_busy = False
+        self._tts_pending_start = False
         self._tts_cancel_requested = False
         self._tts_extracting = False
         self._tts_asset_id: str | None = None
@@ -376,76 +389,177 @@ class MainWindow(QMainWindow):
         QTimer.singleShot(0, self._offer_unsaved_recovery)
 
     def _build_ui(self) -> None:
-        self.setMinimumSize(1180, 720)
-        self.resize(1480, 900)
+        self.setMinimumSize(1024, 700)
+        self.resize(1360, 860)
 
         root = QWidget()
         root_layout = QVBoxLayout(root)
-        root_layout.setContentsMargins(10, 10, 10, 8)
+        root_layout.setContentsMargins(14, 10, 14, 0)
         root_layout.setSpacing(8)
         root_layout.addWidget(self._build_top_bar())
 
-        vertical_splitter = QSplitter(Qt.Orientation.Vertical)
-        horizontal_splitter = QSplitter(Qt.Orientation.Horizontal)
-        horizontal_splitter.addWidget(self._build_library_panel())
-        horizontal_splitter.addWidget(self._build_preview_panel())
-        horizontal_splitter.addWidget(self._build_inspector_panel())
-        horizontal_splitter.setStretchFactor(0, 0)
-        horizontal_splitter.setStretchFactor(1, 1)
-        horizontal_splitter.setStretchFactor(2, 0)
-        horizontal_splitter.setSizes([250, 900, 300])
-        vertical_splitter.addWidget(horizontal_splitter)
-        vertical_splitter.addWidget(self._build_timeline_panel())
-        vertical_splitter.setSizes([520, 330])
-        root_layout.addWidget(vertical_splitter, 1)
+        self.workspace_stack = QStackedWidget()
+        self.empty_workspace = EmptyWorkspace()
+        self.empty_workspace.import_requested.connect(self._choose_media)
+        self.workspace_stack.addWidget(self.empty_workspace)
+        self.workspace_stack.addWidget(self._build_workspace_page())
+        root_layout.addWidget(self.workspace_stack, 1)
+
+        self.task_notice = TaskNoticeBar()
+        self.task_notice.cancel_requested.connect(self._cancel_active_task)
+        self.task_notice.action_requested.connect(self._open_last_output_folder)
+        root_layout.addWidget(self.task_notice)
         self.setCentralWidget(root)
 
         status = QStatusBar()
-        self.status_message = QLabel("READY · 等待素材")
-        self.backend_label = QLabel("PLAYBACK · Qt Multimedia")
+        self.status_message = QLabel("准备就绪")
+        self.status_message.setObjectName("muted")
+        self.backend_label = QLabel("Qt Multimedia")
+        self.backend_label.setObjectName("muted")
         status.addWidget(self.status_message, 1)
         status.addPermanentWidget(self.backend_label)
         self.setStatusBar(status)
+        self._show_empty_workspace()
+
+    def _build_workspace_page(self) -> QWidget:
+        page = QWidget()
+        layout = QVBoxLayout(page)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(8)
+
+        self.horizontal_splitter = QSplitter(Qt.Orientation.Horizontal)
+        self.library_panel = self._build_library_panel()
+        self.horizontal_splitter.addWidget(self.library_panel)
+
+        content = QWidget()
+        content_layout = QVBoxLayout(content)
+        content_layout.setContentsMargins(0, 0, 0, 0)
+        content_layout.setSpacing(8)
+        vertical_splitter = QSplitter(Qt.Orientation.Vertical)
+        vertical_splitter.addWidget(self._build_preview_panel())
+        vertical_splitter.addWidget(self._build_timeline_panel())
+        vertical_splitter.setSizes([440, 310])
+        content_layout.addWidget(vertical_splitter, 1)
+
+        self.context_bar = ContextActionBar()
+        self.workspace_state.selection_changed.connect(
+            self.context_bar.set_selection
+        )
+        self.context_bar.play_requested.connect(self._play_selection)
+        self.context_bar.transcribe_requested.connect(self._toggle_asr_transcription)
+        self.context_bar.generate_requested.connect(self._toggle_tts_generation)
+        self.context_bar.export_requested.connect(self.quick_export)
+        self.context_bar.delete_requested.connect(self._delete_region)
+        self.context_bar.edit_requested.connect(self._show_property_drawer)
+        content_layout.addWidget(self.context_bar)
+        self.horizontal_splitter.addWidget(content)
+
+        self.property_drawer = self._build_inspector_panel()
+        self.property_drawer.setMinimumWidth(300)
+        self.property_drawer.setMaximumWidth(380)
+        self.property_drawer.hide()
+        self.horizontal_splitter.addWidget(self.property_drawer)
+        self.horizontal_splitter.setStretchFactor(0, 0)
+        self.horizontal_splitter.setStretchFactor(1, 1)
+        self.horizontal_splitter.setStretchFactor(2, 0)
+        self.horizontal_splitter.setSizes([230, 900, 0])
+        layout.addWidget(self.horizontal_splitter, 1)
+
+        self.export_button = self.context_bar.export_button
+        self.asr_transcribe_button = self.context_bar.asr_button
+        self.tts_generate_button = self.context_bar.tts_button
+        self.asr_load_button = QPushButton(self)
+        self.asr_load_button.hide()
+        self.tts_load_button = QPushButton(self)
+        self.tts_load_button.hide()
+        return page
 
     def _build_top_bar(self) -> QWidget:
         frame = QFrame()
-        frame.setObjectName("panel")
+        frame.setObjectName("topBar")
         layout = QHBoxLayout(frame)
-        brand = QVBoxLayout()
-        eyebrow = QLabel("VOICE DATA WORKSTATION / V1")
-        eyebrow.setObjectName("eyebrow")
-        title = QLabel("TTS Dataset Studio")
-        title.setObjectName("title")
-        brand.addWidget(eyebrow)
-        brand.addWidget(title)
-        layout.addLayout(brand)
+        layout.setContentsMargins(2, 3, 2, 3)
+        self.sidebar_button = QPushButton("素材")
+        self.sidebar_button.setObjectName("quietAction")
+        self.sidebar_button.setToolTip("展开或收起素材栏")
+        self.sidebar_button.clicked.connect(self._toggle_sidebar)
+        layout.addWidget(self.sidebar_button)
+        self.project_title_label = QLabel("未命名工程")
+        self.project_title_label.setObjectName("title")
+        layout.addWidget(self.project_title_label)
         layout.addStretch()
         self.timecode_label = QLabel("00:00:00.000")
         self.timecode_label.setObjectName("timecode")
         layout.addWidget(self.timecode_label)
-        layout.addSpacing(16)
-        self.play_button = QPushButton("播放 / 暂停")
-        self.play_button.clicked.connect(self._toggle_playback)
-        layout.addWidget(self.play_button)
-        self.export_button = QPushButton("快速导出")
-        self.export_button.setObjectName("accent")
-        self.export_button.clicked.connect(self.quick_export)
-        layout.addWidget(self.export_button)
-        self.asr_load_button = QPushButton("加载 ASR 模型")
-        self.asr_load_button.clicked.connect(self._toggle_asr_model)
-        layout.addWidget(self.asr_load_button)
-        self.asr_transcribe_button = QPushButton("识别选中片段")
-        self.asr_transcribe_button.setEnabled(False)
-        self.asr_transcribe_button.clicked.connect(self._toggle_asr_transcription)
-        layout.addWidget(self.asr_transcribe_button)
-        self.tts_load_button = QPushButton("加载语音引擎")
-        self.tts_load_button.clicked.connect(self._toggle_tts_model)
-        layout.addWidget(self.tts_load_button)
-        self.tts_generate_button = QPushButton("生成语音")
-        self.tts_generate_button.setEnabled(False)
-        self.tts_generate_button.clicked.connect(self._toggle_tts_generation)
-        layout.addWidget(self.tts_generate_button)
+        layout.addSpacing(10)
+        import_button = QPushButton("＋ 导入")
+        import_button.setObjectName("quietAction")
+        import_button.clicked.connect(self._choose_media)
+        layout.addWidget(import_button)
+        undo_button = QPushButton("撤销")
+        undo_button.setObjectName("quietAction")
+        undo_button.setToolTip("撤销  Ctrl+Z")
+        undo_button.clicked.connect(self.undo_stack.undo)
+        layout.addWidget(undo_button)
+        redo_button = QPushButton("重做")
+        redo_button.setObjectName("quietAction")
+        redo_button.setToolTip("重做  Ctrl+Shift+Z")
+        redo_button.clicked.connect(self.undo_stack.redo)
+        layout.addWidget(redo_button)
+        help_button = QPushButton("?")
+        help_button.setObjectName("quietAction")
+        help_button.setToolTip("快捷键")
+        help_button.clicked.connect(self._show_shortcuts)
+        layout.addWidget(help_button)
+        settings_button = QPushButton("设置")
+        settings_button.setObjectName("quietAction")
+        settings_button.clicked.connect(self._show_advanced_settings)
+        layout.addWidget(settings_button)
         return frame
+
+    def _show_empty_workspace(self) -> None:
+        if hasattr(self, "workspace_stack"):
+            self.workspace_stack.setCurrentIndex(0)
+            self.sidebar_button.setEnabled(False)
+
+    def _show_workspace(self) -> None:
+        self.workspace_stack.setCurrentIndex(1)
+        self.sidebar_button.setEnabled(True)
+
+    def _toggle_sidebar(self) -> None:
+        if not self.project.assets:
+            return
+        self.library_panel.setVisible(not self.library_panel.isVisible())
+
+    def _show_property_drawer(self) -> None:
+        if self.width() < 1180:
+            self.library_panel.hide()
+        self.property_drawer.show()
+        self.horizontal_splitter.setSizes(
+            [230 if self.library_panel.isVisible() else 0, 760, 340]
+        )
+
+    def _cancel_active_task(self) -> None:
+        if self.export_worker and self.export_worker.isRunning():
+            self._cancel_export()
+        elif self._asr_busy:
+            self._cancel_asr_batch()
+        elif self._tts_busy:
+            self._cancel_tts_batch()
+
+    def _open_last_output_folder(self) -> None:
+        folder = getattr(self, "_last_output_folder", None)
+        if folder and Path(folder).is_dir():
+            os.startfile(folder)  # noqa: S606
+
+    def resizeEvent(self, event: QResizeEvent) -> None:  # noqa: N802
+        super().resizeEvent(event)
+        if not hasattr(self, "library_panel") or not self.project.assets:
+            return
+        if event.size().width() < 1100:
+            self.library_panel.hide()
+        elif not self.property_drawer.isVisible():
+            self.library_panel.show()
 
     def _panel(self) -> tuple[QFrame, QVBoxLayout]:
         frame = QFrame()
@@ -457,7 +571,7 @@ class MainWindow(QMainWindow):
     def _build_library_panel(self) -> QWidget:
         frame, layout = self._panel()
         label = QLabel("素材库")
-        label.setObjectName("eyebrow")
+        label.setObjectName("title")
         layout.addWidget(label)
         self.asset_list = DropListWidget()
         self.asset_list.files_dropped.connect(
@@ -488,9 +602,10 @@ class MainWindow(QMainWindow):
 
     def _build_preview_panel(self) -> QWidget:
         frame, layout = self._panel()
+        frame.setObjectName("previewPanel")
         header = QHBoxLayout()
-        label = QLabel("SOURCE MONITOR")
-        label.setObjectName("eyebrow")
+        label = QLabel("预览")
+        label.setObjectName("title")
         header.addWidget(label)
         self.video_preview_button = QPushButton("视频")
         self.video_preview_button.setObjectName("timelineTool")
@@ -521,8 +636,13 @@ class MainWindow(QMainWindow):
         self.player_widget.backend_changed.connect(self._playback_backend_changed)
         layout.addWidget(self.player_widget, 1)
         transport = QHBoxLayout()
+        self.play_button = QPushButton("播放")
+        self.play_button.setToolTip("播放 / 暂停  Space")
+        self.play_button.clicked.connect(self._toggle_playback)
+        transport.addWidget(self.play_button)
         for text, delta in (("−5s", -5000), ("−1s", -1000), ("+1s", 1000), ("+5s", 5000)):
             button = QPushButton(text)
+            button.setObjectName("quietAction")
             button.clicked.connect(lambda _checked=False, value=delta: self._seek_relative(value))
             transport.addWidget(button)
         self.position_slider = QSlider(Qt.Orientation.Horizontal)
@@ -533,11 +653,23 @@ class MainWindow(QMainWindow):
 
     def _build_inspector_panel(self) -> QWidget:
         frame, layout = self._panel()
+        header = QHBoxLayout()
+        title = QLabel("片段属性")
+        title.setObjectName("title")
+        header.addWidget(title)
+        header.addStretch()
+        close_button = QPushButton("×")
+        close_button.setObjectName("quietAction")
+        close_button.setToolTip("关闭属性")
+        close_button.clicked.connect(frame.hide)
+        header.addWidget(close_button)
+        layout.addLayout(header)
         tabs = QTabWidget()
         tabs.setMinimumWidth(0)
         tabs.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         tabs.addTab(self._scrollable_inspector_tab(self._build_clip_tab()), "片段")
         tabs.addTab(self._scrollable_inspector_tab(self._build_export_tab()), "导出")
+        tabs.setTabVisible(1, False)
         self.inspector_tabs = tabs
         layout.addWidget(tabs)
         return frame
@@ -695,45 +827,26 @@ class MainWindow(QMainWindow):
 
     def _build_timeline_panel(self) -> QWidget:
         frame, layout = self._panel()
+        frame.setObjectName("timelinePanel")
         frame.setMinimumHeight(230)
         header = QHBoxLayout()
-        label = QLabel("NON-DESTRUCTIVE TIMELINE")
-        label.setObjectName("eyebrow")
+        label = QLabel("时间线")
+        label.setObjectName("title")
         header.addWidget(label)
-        header.addStretch()
-        hint = QLabel("Alt + 滚轮缩放 · 拖动波形轨下边缘展开 dBFS · 点击空白处定位")
-        hint.setObjectName("eyebrow")
-        header.addWidget(hint)
-        layout.addLayout(header)
-        tools = QHBoxLayout()
-        tools.setSpacing(5)
-        tool_specs = [
-            ("[V] 选择片段", self._selection_tool, "点击字幕块或青色区间选择片段"),
-            ("[I] 设入点", self._set_in_point, "在播放头设置片段开始位置"),
-            ("[O] 设出点", self._set_out_point, "在播放头设置片段结束位置并建立片段"),
-            ("[Enter] 播放片段", self._play_selection, "只播放当前选中片段"),
-            ("[X] 删除片段", self._delete_region, "删除当前选中的导出片段"),
-            ("[E] 导出", self.quick_export, "按当前预设导出选中片段"),
-            ("[G] 生成", self._toggle_tts_generation, "用选区字幕和参考声音生成 AI 音频"),
-            ("[−] 缩小", lambda: self._zoom_timeline(-120), "缩小时间线"),
-            ("[适配]", self._fit_timeline, "完整显示当前素材"),
-            ("[+] 放大", lambda: self._zoom_timeline(120), "放大时间线"),
-        ]
-        for text, callback, tooltip in tool_specs:
+        self.selection_status = QLabel("点击字幕，或按 I / O 选择一段声音")
+        self.selection_status.setObjectName("selectionStatus")
+        header.addWidget(self.selection_status, 1)
+        for text, callback, tooltip in (
+            ("−", lambda: self._zoom_timeline(-120), "缩小时间线"),
+            ("适配", self._fit_timeline, "完整显示当前素材"),
+            ("＋", lambda: self._zoom_timeline(120), "放大时间线"),
+        ):
             button = QPushButton(text)
             button.setObjectName("timelineTool")
             button.setToolTip(tooltip)
             button.clicked.connect(callback)
-            tools.addWidget(button)
-        shortcuts_button = QPushButton("[?] 快捷键")
-        shortcuts_button.setObjectName("timelineTool")
-        shortcuts_button.clicked.connect(self._show_shortcuts)
-        tools.addWidget(shortcuts_button)
-        tools.addStretch()
-        self.selection_status = QLabel("未选择片段 · 点击字幕块即可建立选区")
-        self.selection_status.setObjectName("selectionStatus")
-        tools.addWidget(self.selection_status)
-        layout.addLayout(tools)
+            header.addWidget(button)
+        layout.addLayout(header)
         self.timeline = TimelineCanvas()
         self.timeline.cue_selected.connect(self._cue_selected)
         self.timeline.region_selected.connect(self._region_selected)
@@ -811,7 +924,7 @@ class MainWindow(QMainWindow):
             if text in {"新建", "打开", "保存"}:
                 menu.addAction(action)
         menu.addSeparator()
-        advanced_action = QAction("高级设置…", self)
+        advanced_action = QAction("设置…", self)
         advanced_action.triggered.connect(self._show_advanced_settings)
         menu.addAction(advanced_action)
         QApplication.instance().focusChanged.connect(self._update_single_key_shortcuts)
@@ -896,6 +1009,8 @@ class MainWindow(QMainWindow):
             self._activate_asset(self.project.assets[row])
 
     def _activate_asset(self, asset: MediaAsset) -> None:
+        self._show_workspace()
+        self.workspace_state.set_asset(asset.id)
         self.project.active_asset_id = asset.id
         self._scrubbing_playhead = False
         self._awaiting_scrub_ms = None
@@ -1437,15 +1552,43 @@ class MainWindow(QMainWindow):
             os.startfile(path.parent)  # noqa: S606
 
     def _show_advanced_settings(self) -> None:
-        dialog = AdvancedSettingsDialog(self.settings, self)
+        dialog = AdvancedSettingsDialog(
+            self.settings,
+            self,
+            {"asr": self.asr.state, "tts": self.index_tts.state},
+        )
         dialog.settings_applied.connect(self._advanced_settings_applied)
+        dialog.unload_asr_requested.connect(self.asr.unload_model)
+        dialog.unload_tts_requested.connect(self.index_tts.unload_model)
         dialog.exec()
 
     def _advanced_settings_applied(self, settings: AppSettings) -> None:
         self.app_settings = settings
         self.player_widget.set_scrub_hz(settings.scrub_hz)
+        QApplication.instance().setStyleSheet(build_stylesheet(settings.theme))
+        self._apply_export_settings_to_preset()
+        self._load_preset()
+        if self.project.assets:
+            self._mark_dirty()
         if self.asr.state == "loaded" or self.index_tts.state == "loaded":
             self.status_message.setText("SETTINGS · 模型参数将在下次加载时生效")
+
+    def _apply_export_settings_to_preset(self) -> None:
+        preset = self.project.active_preset
+        settings = self.app_settings
+        preset.container = settings.export_container
+        preset.sample_rate = settings.export_sample_rate or None
+        preset.channels = settings.export_channels or None
+        preset.codec = settings.export_codec
+        preset.write_txt = settings.export_write_txt
+        preset.peak_normalize = settings.export_peak_normalize
+        preset.fade_in_ms = settings.export_fade_in_ms
+        preset.fade_out_ms = settings.export_fade_out_ms
+        preset.naming_template = (
+            settings.audio_naming_template or "{source}_{index:04d}_{start}"
+        )
+        preset.regex_pattern = settings.export_regex_pattern
+        preset.regex_replacement = settings.export_regex_replacement
 
     def _seek(self, milliseconds: int) -> None:
         milliseconds = self._clamp_position(milliseconds)
@@ -1606,10 +1749,15 @@ class MainWindow(QMainWindow):
                 self.selection_status.setText(
                     f"已选 {len(clips)} 个 AI 片段 · 总时长 {total_ms / 1000:.3f}s"
                 )
+                self.workspace_state.set_selection(
+                    "generated",
+                    f"{len(clips)} 个 AI 语音片段 · {total_ms / 1000:.2f} 秒",
+                )
                 return
         region = self._current_region()
         if not region or not self.selected_region_id:
-            self.selection_status.setText("未选择片段 · 点击字幕块即可建立选区")
+            self.selection_status.setText("点击字幕，或按 I / O 选择一段声音")
+            self.workspace_state.set_selection("none")
             return
         if len(self.selected_region_ids) > 1:
             total_ms = sum(
@@ -1621,11 +1769,19 @@ class MainWindow(QMainWindow):
                 f"已选 {len(self.selected_region_ids)} 个片段"
                 f"  ·  总时长 {total_ms / 1000:.3f}s"
             )
+            self.workspace_state.set_selection(
+                "region",
+                f"{len(self.selected_region_ids)} 个片段 · {total_ms / 1000:.2f} 秒",
+            )
             return
         duration = (region.end_ms - region.start_ms) / 1000
         self.selection_status.setText(
             f"已选片段  {_timecode(region.start_ms)} → {_timecode(region.end_ms)}"
             f"  ·  {duration:.3f}s"
+        )
+        self.workspace_state.set_selection(
+            "cue" if self.selected_cue else "region",
+            f"{_timecode(region.start_ms)} → {_timecode(region.end_ms)} · {duration:.2f} 秒",
         )
 
     def _show_shortcuts(self) -> None:
@@ -1682,6 +1838,9 @@ class MainWindow(QMainWindow):
     def _asr_loaded(self, runtime: dict) -> None:
         gpu = runtime.get("gpu") or runtime.get("device") or "ready"
         self.status_message.setText(f"ASR LOADED · {gpu}")
+        if self._asr_pending_start:
+            self._asr_pending_start = False
+            self._start_asr_batch()
 
     def _asr_unloaded(self) -> None:
         self.status_message.setText("ASR UNLOADED · 模型已释放")
@@ -1695,10 +1854,11 @@ class MainWindow(QMainWindow):
             self.asr_transcribe_button.setEnabled(False)
         else:
             self.asr_transcribe_button.setEnabled(
-                self._asr_busy or (self.asr.state == "loaded" and has_selection)
+                self._asr_busy
+                or (has_selection and self.asr.state not in {"loading", "unloading"})
             )
             self.asr_transcribe_button.setText(
-                "取消识别" if self._asr_busy else "识别选中片段"
+                "取消识别" if self._asr_busy else "识别字幕"
             )
         if hasattr(self, "asr_load_button") and self.asr.state == "loaded":
             self.asr_load_button.setEnabled(not self._asr_busy)
@@ -1706,8 +1866,15 @@ class MainWindow(QMainWindow):
     def _toggle_asr_transcription(self) -> None:
         if self._asr_busy:
             self._cancel_asr_batch()
-        else:
+        elif self.asr.state == "loaded":
             self._start_asr_batch()
+        else:
+            if not self.selected_region_ids:
+                self._show_error("请先选择一个或多个片段。")
+                return
+            self._asr_pending_start = True
+            self.task_notice.start("正在加载语音识别模型…", cancellable=False)
+            self.asr.load_model(self.app_settings)
 
     def _start_asr_batch(self) -> None:
         asset = self.project.active_asset
@@ -1741,6 +1908,7 @@ class MainWindow(QMainWindow):
         self._asr_queue = []
         self._asr_extracting = True
         self._update_asr_buttons()
+        self.task_notice.start("正在准备语音识别…")
         task = AsrExtractTask(asset, regions, self._asr_temp_folder)
         task.signals.finished.connect(self._asr_audio_ready)
         task.signals.failed.connect(self._asr_failed)
@@ -1767,6 +1935,8 @@ class MainWindow(QMainWindow):
         self._asr_current = self._asr_queue.pop(0)
         completed = len(self._asr_results) + 1
         total = completed + len(self._asr_queue)
+        self.task_notice.message.setText(f"正在识别字幕 {completed}/{total}")
+        self.task_notice.set_progress(round((completed - 1) / total * 100))
         self.status_message.setText(f"ASR · 正在识别 {completed}/{total}")
         self.asr.transcribe(self._asr_current[1], self.app_settings)
 
@@ -1835,6 +2005,9 @@ class MainWindow(QMainWindow):
         self.status_message.setText(
             f"ASR COMPLETE · 已生成 {sum(len(items) for _, items in self._asr_results)} 条字幕"
         )
+        cue_count = sum(len(items) for _, items in self._asr_results)
+        self.task_notice.finish(f"字幕识别完成 · 新增 {cue_count} 条")
+        QTimer.singleShot(5000, self.task_notice.clear)
         self._finish_asr_batch()
 
     def _refresh_after_asr(self) -> None:
@@ -1879,6 +2052,7 @@ class MainWindow(QMainWindow):
         LOGGER.error("ASR failed: %s", message)
         was_busy = self._asr_busy
         cancelled = self._asr_cancel_requested
+        self._asr_pending_start = False
         self._asr_busy = False
         self._asr_cancel_requested = False
         self._asr_extracting = False
@@ -1887,6 +2061,7 @@ class MainWindow(QMainWindow):
         self._asr_current = None
         self._cleanup_asr_temp()
         self._update_asr_buttons()
+        self.task_notice.clear()
         if not cancelled and (was_busy or self.asr.state in {"error", "unloaded"}):
             self._show_error(message)
 
@@ -1922,6 +2097,9 @@ class MainWindow(QMainWindow):
     def _tts_loaded(self, runtime: dict) -> None:
         gpu = runtime.get("gpu") or runtime.get("device") or "ready"
         self.status_message.setText(f"INDEXTTS2 LOADED · {gpu}")
+        if self._tts_pending_start:
+            self._tts_pending_start = False
+            self._start_tts_batch()
 
     def _tts_unloaded(self) -> None:
         self.status_message.setText("INDEXTTS2 UNLOADED · 模型已释放")
@@ -1939,7 +2117,10 @@ class MainWindow(QMainWindow):
             )
             self.tts_generate_button.setEnabled(
                 self._tts_busy
-                or (self.index_tts.state == "loaded" and has_selection)
+                or (
+                    has_selection
+                    and self.index_tts.state not in {"loading", "unloading"}
+                )
             )
         if self.index_tts.state == "loaded":
             self.tts_load_button.setEnabled(not self._tts_busy)
@@ -1947,8 +2128,15 @@ class MainWindow(QMainWindow):
     def _toggle_tts_generation(self) -> None:
         if self._tts_busy:
             self._cancel_tts_batch()
-        else:
+        elif self.index_tts.state == "loaded":
             self._start_tts_batch()
+        else:
+            if not self.selected_region_ids:
+                self._show_error("请先选择一个或多个片段。")
+                return
+            self._tts_pending_start = True
+            self.task_notice.start("正在加载语音生成引擎…", cancellable=False)
+            self.index_tts.load_model(self.app_settings)
 
     def _start_tts_batch(self) -> None:
         asset = self.project.active_asset
@@ -2005,6 +2193,7 @@ class MainWindow(QMainWindow):
         self._tts_analysis_results = []
         self._tts_queue = []
         self._update_tts_buttons()
+        self.task_notice.start("正在分析生成文本…")
         self._start_next_tts_analysis()
 
     def _start_next_tts_analysis(self) -> None:
@@ -2022,6 +2211,8 @@ class MainWindow(QMainWindow):
         self._tts_analysis_current = self._tts_analysis_queue.pop(0)
         complete = len(self._tts_analysis_results) + 1
         total = complete + len(self._tts_analysis_queue)
+        self.task_notice.message.setText(f"正在分析文本 {complete}/{total}")
+        self.task_notice.set_progress(round((complete - 1) / total * 20))
         self.status_message.setText(
             f"INDEXTTS2 · 正在检查文本 {complete}/{total}"
         )
@@ -2109,6 +2300,8 @@ class MainWindow(QMainWindow):
         if not self._tts_queue:
             self._finish_tts_batch()
             self.status_message.setText("INDEXTTS2 COMPLETE · 批量生成完成")
+            self.task_notice.finish("语音生成完成")
+            QTimer.singleShot(5000, self.task_notice.clear)
             return
         self._tts_current = self._tts_queue.pop(0)
         item = self._tts_current
@@ -2119,6 +2312,10 @@ class MainWindow(QMainWindow):
             len(self._tts_analysis_results) - len(self._tts_queue)
         )
         total = len(self._tts_analysis_results)
+        self.task_notice.message.setText(f"正在生成语音 {completed}/{total}")
+        self.task_notice.set_progress(
+            20 + round((completed - 1) / max(1, total) * 75)
+        )
         self.status_message.setText(
             f"INDEXTTS2 · 正在生成 {completed}/{total}"
         )
@@ -2276,7 +2473,9 @@ class MainWindow(QMainWindow):
         LOGGER.error("IndexTTS2 failed: %s", message)
         was_busy = self._tts_busy
         cancelled = self._tts_cancel_requested
+        self._tts_pending_start = False
         self._finish_tts_batch()
+        self.task_notice.clear()
         if not cancelled and (
             was_busy or self.index_tts.state in {"error", "unloaded"}
         ):
@@ -2290,6 +2489,15 @@ class MainWindow(QMainWindow):
             return
         if self.export_worker and self.export_worker.isRunning():
             return
+        if self.app_settings.confirm_before_export:
+            choice = QMessageBox.question(
+                self,
+                "确认导出",
+                f"导出当前片段（{(region.end_ms - region.start_ms) / 1000:.2f} 秒）？",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.Cancel,
+            )
+            if choice != QMessageBox.StandardButton.Yes:
+                return
         self._preset_changed()
         self.export_progress.setValue(0)
         self.cancel_export_button.setEnabled(True)
@@ -2307,20 +2515,27 @@ class MainWindow(QMainWindow):
             default_output,
         )
         self.export_worker.progress.connect(self.export_progress.setValue)
+        self.export_worker.progress.connect(self.task_notice.set_progress)
         self.export_worker.completed.connect(self._export_completed)
         self.export_worker.failed.connect(self._export_failed)
         self.export_worker.start()
-        self.status_message.setText("EXPORTING · FFmpeg 正在处理")
+        self.task_notice.start("正在导出音频…")
+        self.status_message.setText("正在导出")
 
     def _export_completed(self, result: ExportResult) -> None:
         self.cancel_export_button.setEnabled(False)
-        self.status_message.setText(f"EXPORTED · {result.audio_path.name}")
+        self.status_message.setText(f"已导出 · {result.audio_path.name}")
+        self._last_output_folder = result.audio_path.parent
+        self.task_notice.finish(
+            f"导出完成：{result.audio_path.name}",
+            show_action=True,
+        )
         if self.app_settings.open_after_export:
             os.startfile(result.audio_path.parent)  # noqa: S606
-        QMessageBox.information(self, "导出完成", f"已导出：\n{result.audio_path}")
 
     def _export_failed(self, message: str) -> None:
         self.cancel_export_button.setEnabled(False)
+        self.task_notice.clear()
         self._show_error(message)
 
     def _cancel_export(self) -> None:
@@ -2416,6 +2631,7 @@ class MainWindow(QMainWindow):
         self.project.active_preset.naming_template = (
             self.app_settings.audio_naming_template
         )
+        self._apply_export_settings_to_preset()
         self.undo_stack.clear()
         self.waveforms.clear()
         self.generated_waveforms.clear()
@@ -2427,6 +2643,9 @@ class MainWindow(QMainWindow):
         self.selected_generated_clip_ids.clear()
         self.selected_region_id = None
         self.dirty = False
+        self._show_empty_workspace()
+        self.workspace_state.set_asset(None)
+        self.workspace_state.set_selection("none")
         self._set_project_title()
 
     def open_project(self) -> None:
@@ -2590,6 +2809,8 @@ class MainWindow(QMainWindow):
             else self.project.name
         )
         self.setWindowTitle(f"{'*' if self.dirty else ''}{name} — TTS Dataset Studio")
+        if hasattr(self, "project_title_label"):
+            self.project_title_label.setText(f"{'• ' if self.dirty else ''}{name}")
 
     def _confirm_discard(self) -> bool:
         if not self.dirty:
