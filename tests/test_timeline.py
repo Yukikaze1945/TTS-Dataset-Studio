@@ -407,6 +407,56 @@ def test_generated_audio_track_extends_timeline_and_selects_clip(qtbot) -> None:
     assert timeline.selected_generated_clip_ids == {clip.id}
 
 
+def test_generated_clip_focus_preserves_source_region_and_blank_click_clears_focus(
+    qtbot,
+) -> None:
+    region = ExportRegion(1000, 2500)
+    clip = GeneratedAudioClip(
+        path="missing.wav",
+        start_ms=1000,
+        source_offset_ms=0,
+        duration_ms=1200,
+        source_duration_ms=1200,
+        reference_region_id=region.id,
+        text="enhanced",
+    )
+    asset = MediaAsset(
+        "audio.wav",
+        "audio.wav",
+        duration_ms=5000,
+        regions=[region],
+    )
+    asset.enhancement_track.clips.append(clip)
+    timeline = TimelineCanvas()
+    qtbot.addWidget(timeline)
+    timeline.set_asset(asset)
+    timeline.selected_region_id = region.id
+    timeline.selected_region_ids = {region.id}
+    cleared: list[bool] = []
+    timeline.generated_focus_cleared.connect(lambda: cleared.append(True))
+    timeline.show()
+    generated_y = timeline.HEADER + timeline.waveform_height + timeline.TRACK_HEIGHT + 15
+
+    QTest.mouseClick(
+        timeline,
+        Qt.MouseButton.LeftButton,
+        pos=QPoint(timeline._x_for_ms(1500), generated_y),
+    )
+
+    assert timeline.selected_generated_clip_ids == {clip.id}
+    assert timeline.selected_region_ids == {region.id}
+
+    QTest.mouseClick(
+        timeline,
+        Qt.MouseButton.LeftButton,
+        pos=QPoint(timeline._x_for_ms(4000), timeline.HEADER + 20),
+    )
+
+    assert timeline.selected_generated_clip_ids == set()
+    assert timeline.selected_region_ids == {region.id}
+    assert cleared == [True]
+
+
 def test_generated_audio_clip_body_can_move(qtbot) -> None:
     clip = GeneratedAudioClip(
         path="missing.wav",

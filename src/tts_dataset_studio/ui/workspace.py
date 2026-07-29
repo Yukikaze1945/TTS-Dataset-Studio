@@ -17,6 +17,7 @@ from PySide6.QtWidgets import (
 class WorkspaceState(QObject):
     asset_changed = Signal(object)
     selection_changed = Signal(str, str)
+    focus_changed = Signal(str, str)
     task_changed = Signal(str)
 
     def __init__(self, parent: QObject | None = None) -> None:
@@ -24,6 +25,8 @@ class WorkspaceState(QObject):
         self.active_asset_id: str | None = None
         self.selection_kind = "none"
         self.selection_summary = ""
+        self.focus_kind = "none"
+        self.focus_summary = ""
         self.task_kind = ""
 
     def set_asset(self, asset_id: str | None) -> None:
@@ -38,6 +41,14 @@ class WorkspaceState(QObject):
         self.selection_kind = kind
         self.selection_summary = summary
         self.selection_changed.emit(kind, summary)
+
+    def set_focus(self, kind: str, summary: str = "") -> None:
+        """Track a secondary timeline focus without replacing the source selection."""
+        if (kind, summary) == (self.focus_kind, self.focus_summary):
+            return
+        self.focus_kind = kind
+        self.focus_summary = summary
+        self.focus_changed.emit(kind, summary)
 
     def set_task(self, kind: str) -> None:
         if self.task_kind == kind:
@@ -164,18 +175,34 @@ class ContextActionBar(QFrame):
     process_requested = Signal(str)
     delete_requested = Signal()
     edit_requested = Signal()
+    locate_source_requested = Signal()
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self.setObjectName("contextBar")
         self._kind = "none"
+        self._summary = ""
+        self._focus_kind = "none"
+        self._focus_summary = ""
         layout = QHBoxLayout(self)
-        layout.setContentsMargins(12, 8, 12, 8)
+        layout.setContentsMargins(12, 7, 12, 7)
         layout.setSpacing(7)
+
+        summary_layout = QVBoxLayout()
+        summary_layout.setContentsMargins(0, 0, 8, 0)
+        summary_layout.setSpacing(1)
         self.summary = QLabel("")
         self.summary.setObjectName("contextSummary")
-        layout.addWidget(self.summary, 1)
+        self.detail = QLabel("")
+        self.detail.setObjectName("contextDetail")
+        summary_layout.addWidget(self.summary)
+        summary_layout.addWidget(self.detail)
+        layout.addLayout(summary_layout, 1)
+
         self.play_button = self._button("试听", "Enter", self.play_requested)
+        self.play_button.setToolTip(
+            "试听所选时间范围；实际声音遵循轨道 Mute / Solo"
+        )
         self.edit_button = self._button("编辑", "", self.edit_requested)
         self.asr_button = self._button("识别字幕", "", self.transcribe_requested)
         self.tts_button = self._button("生成语音", "G", self.generate_requested)
@@ -196,6 +223,11 @@ class ContextActionBar(QFrame):
                 lambda _checked=False, value=engine: self.process_requested.emit(value)
             )
         self.process_button.setMenu(process_menu)
+        self.locate_button = self._button(
+            "定位源片段",
+            "",
+            self.locate_source_requested,
+        )
         self.delete_button = self._button("删除", "X", self.delete_requested)
         self.export_button = self._button("导出", "E", self.export_requested, primary=True)
         self.export_button.setToolTip(
@@ -203,10 +235,12 @@ class ContextActionBar(QFrame):
         )
         self.asr_button.setObjectName("secondaryAction")
         self.tts_button.setObjectName("secondaryAction")
+        self.locate_button.setObjectName("quietAction")
         self.delete_button.setObjectName("destructiveAction")
         for button in (
             self.play_button,
             self.edit_button,
+            self.locate_button,
             self.asr_button,
             self.tts_button,
             self.process_button,
@@ -226,18 +260,62 @@ class ContextActionBar(QFrame):
 
     def set_selection(self, kind: str, summary: str = "") -> None:
         self._kind = kind
-        visible = kind != "none"
+        self._summary = summary
+        self._refresh()
+
+    def set_focus(self, kind: str, summary: str = "") -> None:
+        self._focus_kind = kind
+        self._focus_summary = summary
+        self._refresh()
+
+    def _refresh(self) -> None:
+        has_source = self._kind in {"region", "cue"}
+        has_generated_focus = self._focus_kind == "generated"
+        visible = has_source or has_generated_focus
         self.setVisible(visible)
         if not visible:
             return
-        self.summary.setText(summary)
-        is_generated = kind == "generated"
-        self.asr_button.setVisible(not is_generated)
-        self.tts_button.setVisible(not is_generated)
-        self.process_button.setVisible(not is_generated)
-        self.export_button.setVisible(not is_generated)
-        self.edit_button.setVisible(kind == "cue")
-        self.delete_button.setVisible(kind in {"region", "generated", "cue"})
+
+        if has_source:
+            self.summary.setText(self._summary)
+            self.detail.setText(
+                f"已聚焦 {self._focus_summary}；处理和导出仍作用于源片段"
+                if has_generated_focus
+                else "接下来可直接识别、生成、处理或导出"
+            )
+        else:
+            self.summary.setText(self._focus_summary)
+            self.detail.setText("这是生成/增强结果；定位源片段后可继续处理")
+
+        unavailable_hint = "先点击字幕，或按 I / O 创建源片段"
+        available_hints = {
+            self.asr_button: "识别所选源片段并写入字幕轨",
+            self.tts_button: "用所选源片段作为参考生成语音（G）",
+            self.process_button: "降噪、去 BGM 或修复所选源片段",
+            self.export_button: (
+                "导出当前可听轨道：Mute 排除，Solo 优先，"
+                "多条可听轨道会混音（E）"
+            ),
+        }
+        for button, available_hint in available_hints.items():
+            button.setVisible(True)
+            button.setEnabled(has_source)
+            button.setToolTip(
+                available_hint if has_source else unavailable_hint
+            )
+
+        self.play_button.setEnabled(has_source or has_generated_focus)
+        self.edit_button.setVisible(self._kind == "cue")
+        self.locate_button.setVisible(has_generated_focus)
+        self.delete_button.setVisible(has_source or has_generated_focus)
+        self.delete_button.setText(
+            "删除结果  X" if has_generated_focus else "删除片段  X"
+        )
+        self.delete_button.setToolTip(
+            "删除聚焦的生成/增强结果"
+            if has_generated_focus
+            else "删除选中的源片段"
+        )
 
 
 class TaskNoticeBar(QFrame):

@@ -5,6 +5,7 @@ from PySide6.QtWidgets import QFormLayout, QScrollArea
 
 from tts_dataset_studio.domain.models import (
     ExportRegion,
+    GeneratedAudioClip,
     MediaAsset,
     Project,
     SubtitleCue,
@@ -397,6 +398,151 @@ def test_plain_cue_selection_replaces_and_ctrl_selection_adds(qtbot) -> None:
     window.dirty = False
 
 
+def test_generated_focus_does_not_replace_source_workflow_selection(qtbot) -> None:
+    window = MainWindow()
+    qtbot.addWidget(window)
+    first = SubtitleCue(500, 1500, "第一句")
+    second = SubtitleCue(2000, 3200, "第二句")
+    track = SubtitleTrack("字幕", cues=[first, second])
+    first_region = ExportRegion(first.start_ms, first.end_ms)
+    clip = GeneratedAudioClip(
+        path="missing.wav",
+        start_ms=first.start_ms,
+        source_offset_ms=0,
+        duration_ms=first.end_ms - first.start_ms,
+        source_duration_ms=first.end_ms - first.start_ms,
+        reference_region_id=first_region.id,
+        text="处理结果",
+    )
+    asset = MediaAsset(
+        "missing.wav",
+        "missing.wav",
+        duration_ms=4000,
+        subtitle_tracks=[track],
+        export_track_id=track.id,
+        regions=[first_region],
+    )
+    asset.enhancement_track.clips.append(clip)
+    window.project = Project(assets=[asset], active_asset_id=asset.id)
+    window.timeline.set_asset(asset)
+    window._apply_region_selection(first_region.id, False, True)
+
+    window._generated_clip_selected(clip.id)
+
+    assert window.selected_region_ids == {first_region.id}
+    assert window.selected_generated_clip_ids == {clip.id}
+    assert window.workspace_state.selection_kind == "region"
+    assert window.workspace_state.focus_kind == "generated"
+    assert window.context_bar.process_button.isEnabled()
+    assert not window.context_bar.locate_button.isHidden()
+    assert "仍作用于源片段" in window.context_bar.detail.text()
+
+    window._cue_selected(track.id, second.id)
+
+    assert window.selected_generated_clip_ids == set()
+    assert window.workspace_state.focus_kind == "none"
+    assert window.selected_region_id != first_region.id
+    assert window.context_bar.process_button.isEnabled()
+    assert window.context_bar.locate_button.isHidden()
+    window.dirty = False
+
+
+def test_tts_completion_keeps_source_actions_available(
+    qtbot,
+    tmp_path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    window = MainWindow()
+    qtbot.addWidget(window)
+    region = ExportRegion(500, 1500)
+    asset = MediaAsset(
+        "missing.wav",
+        "missing.wav",
+        duration_ms=3000,
+        regions=[region],
+    )
+    project_path = tmp_path / "project.ttds"
+    window.project = Project(
+        assets=[asset],
+        active_asset_id=asset.id,
+        project_path=str(project_path),
+    )
+    window.timeline.set_asset(asset)
+    window._apply_region_selection(region.id, False, True)
+    output = tmp_path / "worker-result.wav"
+    output.write_bytes(b"generated")
+    item = TtsBatchItem(region, "生成文本", output=output)
+    window._tts_busy = True
+    window._tts_asset_id = asset.id
+    window._tts_current = item
+    monkeypatch.setattr(window, "_start_next_tts_generation", lambda: None)
+
+    window._tts_generated({"duration_ms": 1000})
+
+    assert window.selected_region_ids == {region.id}
+    assert window.selected_generated_clip_ids == {item.clip_id}
+    assert window.context_bar.process_button.isEnabled()
+    assert window.context_bar.export_button.isEnabled()
+    assert "仍作用于源片段" in window.context_bar.detail.text()
+    window._tts_busy = False
+    window.dirty = False
+
+
+def test_deleting_focused_result_keeps_source_region_selected(qtbot) -> None:
+    window = MainWindow()
+    qtbot.addWidget(window)
+    region = ExportRegion(500, 1500)
+    clip = GeneratedAudioClip(
+        path="missing.wav",
+        start_ms=500,
+        source_offset_ms=0,
+        duration_ms=1000,
+        source_duration_ms=1000,
+        reference_region_id=region.id,
+        text="处理结果",
+    )
+    asset = MediaAsset(
+        "missing.wav",
+        "missing.wav",
+        duration_ms=3000,
+        regions=[region],
+    )
+    asset.enhancement_track.clips.append(clip)
+    window.project = Project(assets=[asset], active_asset_id=asset.id)
+    window.timeline.set_asset(asset)
+    window._apply_region_selection(region.id, False, True)
+    window._generated_clip_selected(clip.id)
+
+    window._delete_region()
+
+    assert asset.enhancement_track.clips == []
+    assert window.selected_region_ids == {region.id}
+    assert window.selected_region_id == region.id
+    assert window.selected_generated_clip_ids == set()
+    assert window.context_bar.process_button.isEnabled()
+    window.dirty = False
+
+
+def test_track_monitor_toggle_reports_plain_language_state(qtbot) -> None:
+    window = MainWindow()
+    qtbot.addWidget(window)
+    asset = MediaAsset("missing.wav", "missing.wav", duration_ms=3000)
+    enhancement = asset.enhancement_track
+    window.project = Project(assets=[asset], active_asset_id=asset.id)
+    window.timeline.set_asset(asset)
+
+    window._toggle_track_monitor("source", "mute")
+
+    assert asset.source_muted
+    assert window.status_message.text() == "原声轨 · 静音已开启"
+
+    window._toggle_track_monitor(enhancement.id, "solo")
+
+    assert enhancement.solo
+    assert window.status_message.text() == "增强音轨 · 独奏已开启"
+    window.dirty = False
+
+
 def test_missing_asset_stays_offline_without_starting_player(qtbot, tmp_path) -> None:
     window = MainWindow()
     qtbot.addWidget(window)
@@ -429,6 +575,43 @@ def test_narrow_workspace_collapses_library(qtbot, tmp_path) -> None:
     assert window.settings_button.isVisible()
     assert not window.undo_button.isVisible()
     assert window.settings_button.geometry().right() <= window.top_bar.rect().right()
+    window.dirty = False
+
+
+def test_narrow_workspace_keeps_context_actions_inside_window(qtbot, tmp_path) -> None:
+    window = MainWindow()
+    qtbot.addWidget(window)
+    region = ExportRegion(500, 1500)
+    clip = GeneratedAudioClip(
+        path="missing.wav",
+        start_ms=500,
+        source_offset_ms=0,
+        duration_ms=1000,
+        source_duration_ms=1000,
+        reference_region_id=region.id,
+        text="处理结果",
+    )
+    asset = MediaAsset(
+        str(tmp_path / "missing.wav"),
+        "missing.wav",
+        duration_ms=3000,
+        regions=[region],
+    )
+    asset.enhancement_track.clips.append(clip)
+    window.project = Project(assets=[asset], active_asset_id=asset.id)
+    window._activate_asset(asset)
+    window._apply_region_selection(region.id, False, True)
+    window._generated_clip_selected(clip.id)
+    window.resize(1024, 720)
+    window.show()
+    qtbot.wait(20)
+
+    assert not window.context_bar.isHidden()
+    assert window.context_bar.export_button.geometry().right() <= (
+        window.context_bar.contentsRect().right()
+    )
+    assert window.context_bar.process_button.isVisibleTo(window.context_bar)
+    assert window.context_bar.locate_button.isVisibleTo(window.context_bar)
     window.dirty = False
 
 

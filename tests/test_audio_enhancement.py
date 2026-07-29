@@ -166,12 +166,34 @@ def test_build_stupase_command_requires_official_checkout(tmp_path: Path) -> Non
     assert cwd == root
 
 
-def test_context_bar_exposes_audio_processing_only_for_source_selection(qtbot) -> None:
+def test_context_bar_keeps_source_actions_when_result_is_focused(qtbot) -> None:
     QApplication.instance()
     bar = ContextActionBar()
     qtbot.addWidget(bar)
+    bar.show()
 
     bar.set_selection("region", "one region")
     assert bar.process_button.isVisibleTo(bar)
-    bar.set_selection("generated", "one generated clip")
-    assert not bar.process_button.isVisible()
+    assert bar.process_button.isEnabled()
+
+    bar.set_focus("generated", "one generated clip")
+
+    assert bar.process_button.isVisibleTo(bar)
+    assert bar.process_button.isEnabled()
+    assert bar.export_button.isVisibleTo(bar)
+    assert bar.locate_button.isVisibleTo(bar)
+    assert "仍作用于源片段" in bar.detail.text()
+
+
+def test_context_bar_explains_unavailable_source_actions(qtbot) -> None:
+    QApplication.instance()
+    bar = ContextActionBar()
+    qtbot.addWidget(bar)
+    bar.show()
+
+    bar.set_focus("generated", "one generated clip")
+
+    assert bar.process_button.isVisibleTo(bar)
+    assert not bar.process_button.isEnabled()
+    assert "先点击字幕" in bar.process_button.toolTip()
+    assert bar.locate_button.isVisibleTo(bar)

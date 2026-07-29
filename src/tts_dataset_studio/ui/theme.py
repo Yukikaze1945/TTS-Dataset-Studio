@@ -81,8 +81,9 @@ QFrame#topBar {{
     border-radius: 0;
 }}
 QFrame#contextBar {{
-    background: {c["accent_soft"]};
-    border: 1px solid {c["accent"]};
+    background: {c["surface"]};
+    border: 1px solid {c["border"]};
+    border-left: 3px solid {c["accent"]};
     border-radius: 10px;
 }}
 QFrame#taskBar {{
@@ -167,6 +168,11 @@ QLabel#contextSummary {{
     padding-left: 4px;
     font-weight: 600;
 }}
+QLabel#contextDetail {{
+    color: {c["muted"]};
+    padding-left: 4px;
+    font-size: 8.5pt;
+}}
 QLabel#selectionStatus {{
     color: {c["muted"]};
     background: transparent;
@@ -201,7 +207,7 @@ QPushButton#primaryAction, QPushButton#accent {{
 QPushButton#primaryAction:hover, QPushButton#accent:hover {{
     background: {c["accent_hover"]};
 }}
-QPushButton#secondaryAction {{
+QPushButton#secondaryAction, QToolButton#secondaryAction {{
     color: {c["text"]};
     background: {c["raised"]};
     border: 1px solid {c["border"]};

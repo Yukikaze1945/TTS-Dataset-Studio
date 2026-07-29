@@ -12,6 +12,7 @@ subtitle tracks, non-destructive regions, gain control, and FFmpeg export in one
 
 - Empty projects show one import entry point and a three-step guide.
 - Imported media opens a single workspace with library, preview, timeline, and contextual actions.
+- Generated/enhanced results use a secondary focus and never replace the source work region.
 - Clip properties appear only when requested; encoding, AI engines, caches, and tool paths stay in Settings.
 - Dark, light, and Windows-system themes are supported, with automatic library collapse in narrow windows.
 
@@ -62,7 +63,7 @@ uv run tts-dataset-studio
 | I / O | Set in/out points |
 | Enter | Play the current subtitle or region |
 | E | Export audible tracks with the active preset (respects Mute/Solo) |
-| X | Delete selected export regions |
+| X | Delete focused generated/enhanced results first, otherwise selected export regions |
 | D / F | Previous/next video frame |
 | C | Save a clean source-video still |
 | G | Generate IndexTTS2 speech for the selected regions |

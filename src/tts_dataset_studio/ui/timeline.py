@@ -89,6 +89,10 @@ class WaveformDbScale(QWidget):
         timeline.waveform_height_changed.connect(lambda _height: self.update())
         self.setFixedWidth(self.WIDTH)
         self.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Expanding)
+        self.setToolTip(
+            "轨道监听：M = 静音，S = 独奏。存在独奏轨时只播放独奏轨。"
+        )
+        self.setAccessibleName("音轨静音与独奏控制")
 
     def paintEvent(self, event) -> None:  # noqa: N802
         painter = QPainter(self)
@@ -145,7 +149,11 @@ class WaveformDbScale(QWidget):
         source_y = TimelineCanvas.HEADER + 5
         painter.setFont(QFont("Consolas", 7, QFont.Weight.Bold))
         painter.setPen(QColor("#9fb0c0"))
-        painter.drawText(QRectF(4, source_y, 42, 20), Qt.AlignmentFlag.AlignVCenter, "SOURCE")
+        painter.drawText(
+            QRectF(4, source_y, 42, 20),
+            Qt.AlignmentFlag.AlignVCenter,
+            "原声",
+        )
         states = [
             ("M", asset.source_muted, QRectF(49, source_y, 18, 20)),
             ("S", asset.source_solo, QRectF(70, source_y, 18, 20)),
@@ -175,6 +183,12 @@ class WaveformDbScale(QWidget):
             painter.drawRoundedRect(rect, 3, 3)
             painter.setPen(QColor("#17120b" if active else "#a8b8c6"))
             painter.drawText(rect, Qt.AlignmentFlag.AlignCenter, text)
+            if active:
+                painter.setBrush(QColor("#fff1cf"))
+                painter.setPen(Qt.PenStyle.NoPen)
+                painter.drawEllipse(
+                    QRectF(rect.right() - 4, rect.top() + 2, 2.5, 2.5)
+                )
 
     def mousePressEvent(self, event: QMouseEvent) -> None:  # noqa: N802
         if event.button() != Qt.MouseButton.LeftButton or not self.timeline.asset:
@@ -278,6 +292,7 @@ class TimelineCanvas(QWidget):
     cue_selected = Signal(str, str, bool, bool)
     region_selected = Signal(str, bool, bool)
     generated_clip_selected = Signal(str, bool, bool)
+    generated_focus_cleared = Signal()
     generated_clip_changed = Signal(object)
     generated_clip_collision = Signal(str)
     item_changed = Signal(object)
@@ -683,6 +698,11 @@ class TimelineCanvas(QWidget):
             return
         hit = self._hit_test(event.position().toPoint())
         if hit is None:
+            if self.selected_generated_clip_ids:
+                self.selected_generated_clip_ids.clear()
+                self.selected_generated_clip_id = None
+                self.generated_focus_cleared.emit()
+                self.update()
             self.seek_requested.emit(self._ms_for_x(round(event.position().x())))
             return
         kind, item_id, edge = hit
@@ -701,6 +721,10 @@ class TimelineCanvas(QWidget):
             else:
                 self.selected_cue_ids = {cue_id}
                 self.selected_region_ids.clear()
+            if self.selected_generated_clip_ids:
+                self.selected_generated_clip_ids.clear()
+                self.selected_generated_clip_id = None
+                self.generated_focus_cleared.emit()
             self.selected_cue_id = cue_id if selected else None
             self.cue_selected.emit(track_id, cue_id, additive, selected)
             self._drag = _DragState(
@@ -724,8 +748,6 @@ class TimelineCanvas(QWidget):
                     self.selected_generated_clip_ids.add(item_id)
             else:
                 self.selected_generated_clip_ids = {item_id}
-                self.selected_cue_ids.clear()
-                self.selected_region_ids.clear()
             self.selected_generated_clip_id = (
                 item_id if selected else next(iter(self.selected_generated_clip_ids), None)
             )
@@ -752,6 +774,10 @@ class TimelineCanvas(QWidget):
                 self.selected_region_ids = {item_id}
                 self.selected_cue_ids.clear()
                 self.selected_cue_id = None
+            if self.selected_generated_clip_ids:
+                self.selected_generated_clip_ids.clear()
+                self.selected_generated_clip_id = None
+                self.generated_focus_cleared.emit()
             self.selected_region_id = item_id if selected else None
             self.region_selected.emit(item_id, additive, selected)
             self._drag = _DragState(

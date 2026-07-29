@@ -531,6 +531,7 @@ class MainWindow(QMainWindow):
         self.workspace_state.selection_changed.connect(
             self.context_bar.set_selection
         )
+        self.workspace_state.focus_changed.connect(self.context_bar.set_focus)
         self.context_bar.play_requested.connect(self._play_selection)
         self.context_bar.transcribe_requested.connect(self._toggle_asr_transcription)
         self.context_bar.generate_requested.connect(self._toggle_tts_generation)
@@ -538,6 +539,9 @@ class MainWindow(QMainWindow):
         self.context_bar.export_requested.connect(self.quick_export)
         self.context_bar.delete_requested.connect(self._delete_region)
         self.context_bar.edit_requested.connect(self._show_property_drawer)
+        self.context_bar.locate_source_requested.connect(
+            self._locate_generated_reference
+        )
         content_layout.addWidget(self.context_bar)
         self.horizontal_splitter.addWidget(content)
 
@@ -996,6 +1000,9 @@ class MainWindow(QMainWindow):
         self.timeline.scrub_finished.connect(self._finish_scrub)
         self.timeline.item_changed.connect(self._timeline_item_changed)
         self.timeline.generated_clip_selected.connect(self._generated_clip_selected)
+        self.timeline.generated_focus_cleared.connect(
+            self._clear_generated_focus
+        )
         self.timeline.generated_clip_changed.connect(
             self._timeline_generated_clip_changed
         )
@@ -1285,6 +1292,7 @@ class MainWindow(QMainWindow):
         if track_name == "source":
             target = asset
             attribute = "source_muted" if control == "mute" else "source_solo"
+            track_label = "原声轨"
         else:
             target = next(
                 (
@@ -1297,10 +1305,16 @@ class MainWindow(QMainWindow):
             if target is None:
                 return
             attribute = "muted" if control == "mute" else "solo"
+            track_label = target.name
         setattr(target, attribute, not bool(getattr(target, attribute)))
+        active = bool(getattr(target, attribute))
         self._schedule_ai_monitor()
         self._apply_track_monitor()
         self._mark_dirty()
+        control_label = "静音" if control == "mute" else "独奏"
+        self.status_message.setText(
+            f"{track_label} · {control_label}{'已开启' if active else '已关闭'}"
+        )
 
     def _refresh_subtitles(self) -> None:
         self.subtitle_tree.clear()
@@ -1411,8 +1425,24 @@ class MainWindow(QMainWindow):
                 self.selected_generated_clip_ids.discard(clip_id)
         else:
             self.selected_generated_clip_ids = {clip_id} if selected else set()
-            self.selected_region_ids.clear()
-            self.selected_region_id = None
+        if selected and not self.selected_region_ids:
+            clip = self._generated_clip_by_id(clip_id)
+            if clip and clip.reference_region_id:
+                self._apply_region_selection(
+                    clip.reference_region_id,
+                    additive=False,
+                    selected=True,
+                    clear_generated_focus=False,
+                )
+                self._select_export_cue_for_current_range()
+        self.timeline.selected_generated_clip_ids = set(
+            self.selected_generated_clip_ids
+        )
+        self.timeline.selected_generated_clip_id = next(
+            iter(self.selected_generated_clip_ids),
+            None,
+        )
+        self.timeline.update()
         self._update_selection_status()
 
     def _apply_region_selection(
@@ -1420,7 +1450,12 @@ class MainWindow(QMainWindow):
         region_id: str,
         additive: bool,
         selected: bool,
+        *,
+        clear_generated_focus: bool = True,
     ) -> None:
+        asset = self.project.active_asset
+        if not asset or not any(region.id == region_id for region in asset.regions):
+            return
         if additive:
             if selected:
                 self.selected_region_ids.add(region_id)
@@ -1435,7 +1470,83 @@ class MainWindow(QMainWindow):
         )
         self.timeline.selected_region_ids = set(self.selected_region_ids)
         self.timeline.selected_region_id = self.selected_region_id
+        if selected and clear_generated_focus:
+            self._clear_generated_focus(update_status=False)
         self.timeline.update()
+
+    def _generated_clip_by_id(self, clip_id: str) -> GeneratedAudioClip | None:
+        asset = self.project.active_asset
+        if not asset:
+            return None
+        return next(
+            (clip for clip in asset.generated_clips() if clip.id == clip_id),
+            None,
+        )
+
+    def _set_generated_focus(self, clip_ids: set[str]) -> None:
+        asset = self.project.active_asset
+        valid_ids = (
+            {clip.id for clip in asset.generated_clips()}
+            if asset
+            else set()
+        )
+        self.selected_generated_clip_ids = set(clip_ids) & valid_ids
+        self.timeline.selected_generated_clip_ids = set(
+            self.selected_generated_clip_ids
+        )
+        self.timeline.selected_generated_clip_id = next(
+            iter(self.selected_generated_clip_ids),
+            None,
+        )
+        self.timeline.update()
+        self._update_selection_status()
+
+    def _clear_generated_focus(self, *, update_status: bool = True) -> None:
+        changed = bool(
+            self.selected_generated_clip_ids
+            or self.timeline.selected_generated_clip_ids
+        )
+        self.selected_generated_clip_ids.clear()
+        self.timeline.selected_generated_clip_ids.clear()
+        self.timeline.selected_generated_clip_id = None
+        if changed:
+            self.timeline.update()
+        if update_status:
+            self._update_selection_status()
+
+    def _locate_generated_reference(self) -> None:
+        asset = self.project.active_asset
+        if not asset or not self.selected_generated_clip_ids:
+            return
+        reference_ids = {
+            clip.reference_region_id
+            for clip in asset.generated_clips()
+            if clip.id in self.selected_generated_clip_ids
+            and clip.reference_region_id
+        }
+        regions = sorted(
+            (
+                region
+                for region in asset.regions
+                if region.id in reference_ids
+            ),
+            key=lambda region: (region.start_ms, region.end_ms),
+        )
+        if not regions:
+            self.status_message.setText("REFERENCE OFFLINE · 找不到对应源片段")
+            return
+        self.selected_region_ids = {region.id for region in regions}
+        self.selected_region_id = regions[0].id
+        self.timeline.selected_region_ids = set(self.selected_region_ids)
+        self.timeline.selected_region_id = self.selected_region_id
+        self._clear_generated_focus(update_status=False)
+        self._select_export_cue_for_current_range()
+        self._seek(regions[0].start_ms)
+        self.timeline.update()
+        self.status_message.setText(
+            f"已定位源片段 · {_timecode(regions[0].start_ms)}"
+        )
+        self._update_selection_status()
 
     def _current_cue(self):
         asset = self.project.active_asset
@@ -1866,12 +1977,30 @@ class MainWindow(QMainWindow):
             for region in asset.regions:
                 if region.id == self.selected_region_id:
                     return region
-        return asset.regions[-1] if asset.regions else None
+        return None
 
     def _play_selection(self) -> None:
         region = self._current_region()
         if region:
             self.player_widget.play_range(region.start_ms, region.end_ms)
+            return
+        focused = sorted(
+            (
+                clip
+                for clip in (
+                    self.project.active_asset.generated_clips()
+                    if self.project.active_asset
+                    else []
+                )
+                if clip.id in self.selected_generated_clip_ids
+            ),
+            key=lambda clip: (clip.start_ms, clip.end_ms),
+        )
+        if focused:
+            self.player_widget.play_range(
+                focused[0].start_ms,
+                focused[-1].end_ms,
+            )
 
     def _delete_region(self) -> None:
         asset = self.project.active_asset
@@ -1894,10 +2023,12 @@ class MainWindow(QMainWindow):
         self.undo_stack.endMacro()
         self.selected_region_ids.clear()
         self.selected_region_id = None
+        self.selected_cue = None
         self.timeline.selected_region_ids.clear()
         self.timeline.selected_region_id = None
         self.timeline.selected_cue_ids.clear()
         self.timeline.selected_cue_id = None
+        self._show_cue_in_editor(None)
         self.timeline.update()
         self._mark_dirty()
         self._update_selection_status()
@@ -1940,59 +2071,97 @@ class MainWindow(QMainWindow):
                 )
             )
         self.undo_stack.endMacro()
-        self.selected_generated_clip_ids.clear()
+        self._clear_generated_focus(update_status=False)
         self._mark_dirty()
+        self._update_selection_status()
 
     def _update_selection_status(self) -> None:
         if not hasattr(self, "selection_status"):
             return
-        self._update_asr_buttons()
-        self._update_tts_buttons()
-        if self.selected_generated_clip_ids and self.project.active_asset:
-            clips = [
+        asset = self.project.active_asset
+        focused_clips = (
+            [
                 clip
-                for clip in self.project.active_asset.generated_clips()
+                for clip in asset.generated_clips()
                 if clip.id in self.selected_generated_clip_ids
             ]
-            if clips:
-                total_ms = sum(clip.duration_ms for clip in clips)
-                self.selection_status.setText(
-                    f"已选 {len(clips)} 个音频片段 · 总时长 {total_ms / 1000:.3f}s"
-                )
-                self.workspace_state.set_selection(
-                    "generated",
-                    f"{len(clips)} 个生成/增强片段 · {total_ms / 1000:.2f} 秒",
-                )
-                return
+            if asset
+            else []
+        )
+        focus_summary = ""
+        if focused_clips:
+            focus_duration_ms = sum(clip.duration_ms for clip in focused_clips)
+            focus_summary = (
+                f"{len(focused_clips)} 个生成/增强结果"
+                f" · {focus_duration_ms / 1000:.2f} 秒"
+            )
+            self.workspace_state.set_focus("generated", focus_summary)
+        else:
+            self.workspace_state.set_focus("none")
+
         region = self._current_region()
         if not region or not self.selected_region_id:
-            self.selection_status.setText("点击字幕，或按 I / O 选择一段声音")
+            self.selection_status.setText(
+                f"已聚焦 {focus_summary} · 点击“定位源片段”继续处理"
+                if focused_clips
+                else "点击字幕，或按 I / O 选择一段声音"
+            )
             self.workspace_state.set_selection("none")
-            return
-        if len(self.selected_region_ids) > 1:
+        elif len(self.selected_region_ids) > 1:
             total_ms = sum(
                 item.end_ms - item.start_ms
-                for item in self.project.active_asset.regions
+                for item in asset.regions
                 if item.id in self.selected_region_ids
             )
-            self.selection_status.setText(
-                f"已选 {len(self.selected_region_ids)} 个片段"
+            status = (
+                f"已选 {len(self.selected_region_ids)} 个片段（源）"
                 f"  ·  总时长 {total_ms / 1000:.3f}s"
             )
+            if focused_clips:
+                status += f"  ·  聚焦 {len(focused_clips)} 个处理结果"
+            self.selection_status.setText(status)
             self.workspace_state.set_selection(
                 "region",
-                f"{len(self.selected_region_ids)} 个片段 · {total_ms / 1000:.2f} 秒",
+                f"{len(self.selected_region_ids)} 个源片段 · {total_ms / 1000:.2f} 秒",
             )
+        else:
+            duration = (region.end_ms - region.start_ms) / 1000
+            status = (
+                f"源片段  {_timecode(region.start_ms)} → {_timecode(region.end_ms)}"
+                f"  ·  {duration:.3f}s"
+            )
+            if focused_clips:
+                status += f"  ·  聚焦 {len(focused_clips)} 个处理结果"
+            self.selection_status.setText(status)
+            self.workspace_state.set_selection(
+                "cue" if self.selected_cue else "region",
+                f"源片段 {_timecode(region.start_ms)} → "
+                f"{_timecode(region.end_ms)} · {duration:.2f} 秒",
+            )
+
+        self._update_asr_buttons()
+        self._update_tts_buttons()
+        self._update_audio_processing_button()
+
+    def _update_audio_processing_button(self) -> None:
+        if not hasattr(self, "context_bar"):
             return
-        duration = (region.end_ms - region.start_ms) / 1000
-        self.selection_status.setText(
-            f"已选片段  {_timecode(region.start_ms)} → {_timecode(region.end_ms)}"
-            f"  ·  {duration:.3f}s"
+        running = bool(
+            self.enhancement_worker
+            and self.enhancement_worker.isRunning()
         )
-        self.workspace_state.set_selection(
-            "cue" if self.selected_cue else "region",
-            f"{_timecode(region.start_ms)} → {_timecode(region.end_ms)} · {duration:.2f} 秒",
+        has_source = bool(
+            self.selected_region_ids
+            and self.project.active_asset
         )
+        self.context_bar.process_button.setText(
+            "处理中…" if running else "处理音频"
+        )
+        self.context_bar.process_button.setEnabled(has_source and not running)
+        if running:
+            self.context_bar.process_button.setToolTip(
+                "当前音频处理完成或取消后可再次处理"
+            )
 
     def _show_shortcuts(self) -> None:
         QMessageBox.information(
@@ -2538,8 +2707,12 @@ class MainWindow(QMainWindow):
             return
         if not self._tts_queue:
             self._finish_tts_batch()
-            self.status_message.setText("INDEXTTS2 COMPLETE · 批量生成完成")
-            self.task_notice.finish("语音生成完成")
+            self.status_message.setText(
+                "INDEXTTS2 COMPLETE · 可直接选择下一段继续生成"
+            )
+            self.task_notice.finish(
+                "语音生成完成 · 源片段仍保持选中"
+            )
             QTimer.singleShot(5000, self.task_notice.clear)
             return
         self._tts_current = self._tts_queue.pop(0)
@@ -2651,6 +2824,7 @@ class MainWindow(QMainWindow):
             f"{ENGINE_LABELS[engine]} · 正在处理 0/{len(items)}"
         )
         self.status_message.setText(f"AUDIO · {ENGINE_LABELS[engine]}正在运行")
+        self._update_audio_processing_button()
 
     def _audio_enhancement_item_completed(self, payload: object) -> None:
         item, path = payload
@@ -2710,7 +2884,7 @@ class MainWindow(QMainWindow):
                 ENGINE_LABELS[self._enhancement_engine],
             )
         )
-        self.selected_generated_clip_ids = {new_clip.id}
+        self._set_generated_focus({new_clip.id})
         self._mark_dirty()
         completed = len(
             [
@@ -2747,11 +2921,16 @@ class MainWindow(QMainWindow):
         self._enhancement_temp_folder = None
         self._enhancement_asset_id = None
         self._enhancement_engine = ""
+        self._update_audio_processing_button()
 
     def _audio_enhancement_completed(self) -> None:
         label = ENGINE_LABELS.get(self._enhancement_engine, "音频处理")
-        self.task_notice.finish(f"{label}完成 · 结果已加入增强音轨")
-        self.status_message.setText(f"AUDIO READY · {label}")
+        self.task_notice.finish(
+            f"{label}完成 · 已加入增强音轨，源片段仍保持选中"
+        )
+        self.status_message.setText(
+            f"AUDIO READY · {label} · 可直接选择下一段继续处理"
+        )
         self._finish_audio_enhancement()
 
     def _audio_enhancement_cancelled(self) -> None:
@@ -2845,10 +3024,7 @@ class MainWindow(QMainWindow):
                 )
             )
             self._mark_dirty()
-            self.selected_generated_clip_ids = {new_clip.id}
-            self.timeline.selected_generated_clip_ids = {new_clip.id}
-            self.timeline.selected_generated_clip_id = new_clip.id
-            self.timeline.update()
+            self._set_generated_focus({new_clip.id})
         except Exception as exc:  # noqa: BLE001
             self._tts_current = None
             self._tts_failed(str(exc))
@@ -3081,10 +3257,12 @@ class MainWindow(QMainWindow):
         self.selected_region_ids.clear()
         self.selected_generated_clip_ids.clear()
         self.selected_region_id = None
+        self.selected_cue = None
         self.dirty = False
         self._show_empty_workspace()
         self.workspace_state.set_asset(None)
         self.workspace_state.set_selection("none")
+        self.workspace_state.set_focus("none")
         self._set_project_title()
 
     def open_project(self) -> None:
