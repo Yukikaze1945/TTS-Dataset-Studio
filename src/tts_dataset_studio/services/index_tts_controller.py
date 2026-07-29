@@ -82,11 +82,11 @@ class IndexTtsController(QObject):
             torch_compile=settings.index_tts_torch_compile,
         )
 
-    def analyze_text(self, text: str) -> None:
+    def analyze_text(self, text: str) -> int | None:
         if self.state != "loaded":
             self.failed.emit("请先加载语音引擎。")
-            return
-        self._send("analyze_text", text=text)
+            return None
+        return self._send("analyze_text", text=text)
 
     def generate(
         self,
@@ -127,7 +127,7 @@ class IndexTtsController(QObject):
             self._process.kill()
             self._process.waitForFinished(1000)
 
-    def _send(self, command: str, **payload) -> None:
+    def _send(self, command: str, **payload) -> int:
         request_id = self._next_id
         self._next_id += 1
         self._pending[request_id] = command
@@ -135,6 +135,7 @@ class IndexTtsController(QObject):
         self._process.write(
             (json.dumps(message, ensure_ascii=False) + "\n").encode("utf-8")
         )
+        return request_id
 
     def _read_stdout(self) -> None:
         self._buffer.extend(bytes(self._process.readAllStandardOutput()))

@@ -11,7 +11,7 @@ from tts_dataset_studio.domain.models import (
     SubtitleTrack,
 )
 from tts_dataset_studio.services.media import ToolPaths
-from tts_dataset_studio.ui.main_window import MainWindow
+from tts_dataset_studio.ui.main_window import MainWindow, TtsBatchItem
 
 
 def test_main_window_builds(qtbot) -> None:
@@ -274,6 +274,78 @@ def test_preview_preserves_bilingual_subtitle_lines(qtbot) -> None:
 
     assert window.player_widget.subtitle_overlay.text() == cue.text
     window.dirty = False
+
+
+def test_tts_batch_uses_current_edited_subtitle_text(
+    qtbot,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    window = MainWindow()
+    qtbot.addWidget(window)
+    cue = SubtitleCue(1000, 4500, "你好\nこんにちは")
+    track = SubtitleTrack("双语", cues=[cue])
+    region = ExportRegion(1000, 4500)
+    asset = MediaAsset(
+        "missing.wav",
+        "missing.wav",
+        duration_ms=5000,
+        subtitle_tracks=[track],
+        export_track_id=track.id,
+        regions=[region],
+    )
+    window.project = Project(assets=[asset], active_asset_id=asset.id)
+    window.selected_cue = (track.id, cue.id)
+    window.selected_region_id = region.id
+    window.selected_region_ids = {region.id}
+    window.index_tts.state = "loaded"
+    window._show_cue_in_editor(cue)
+    monkeypatch.setattr(window, "_start_next_tts_analysis", lambda: None)
+
+    window.cue_text.setPlainText("你好")
+    window._start_tts_batch()
+
+    assert cue.text == "你好"
+    assert [item.text for item in window._tts_analysis_queue] == ["你好"]
+    window._finish_tts_batch()
+    window.dirty = False
+
+
+def test_tts_analysis_ignores_stale_response_from_previous_text(
+    qtbot,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    window = MainWindow()
+    qtbot.addWidget(window)
+    item = TtsBatchItem(ExportRegion(1000, 4500), "你好")
+    window._tts_busy = True
+    window._tts_analysis_current = item
+    window._tts_analysis_request_id = 22
+    monkeypatch.setattr(window, "_start_next_tts_analysis", lambda: None)
+
+    window._tts_text_analyzed(
+        {
+            "id": 21,
+            "text": "こんにちは",
+            "unknown_count": 5,
+            "unknown_tokens": ["こ", "ん", "に", "ち", "は"],
+        }
+    )
+
+    assert window._tts_analysis_current is item
+    assert window._tts_analysis_results == []
+
+    window._tts_text_analyzed(
+        {
+            "id": 22,
+            "text": "你好",
+            "unknown_count": 0,
+            "unknown_tokens": [],
+        }
+    )
+
+    assert window._tts_analysis_current is None
+    assert window._tts_analysis_results[0]["text"] == "你好"
+    window._finish_tts_batch()
 
 
 def test_asr_action_loads_engine_on_demand(qtbot, monkeypatch) -> None:

@@ -209,6 +209,16 @@ def test_index_tts_controller_state_messages() -> None:
     assert generated[0]["duration_ms"] == 1234
 
 
+def test_index_tts_controller_returns_analysis_request_id() -> None:
+    controller = IndexTtsController()
+    controller.state = "loaded"
+
+    request_id = controller.analyze_text("只保留中文")
+
+    assert request_id == 1
+    assert controller._pending == {1: "analyze_text"}
+
+
 def test_index_tts_worker_protocol_is_utf8_jsonl(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

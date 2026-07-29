@@ -359,6 +359,7 @@ class MainWindow(QMainWindow):
         self._tts_temp_folder: Path | None = None
         self._tts_analysis_queue: list[TtsBatchItem] = []
         self._tts_analysis_current: TtsBatchItem | None = None
+        self._tts_analysis_request_id: int | None = None
         self._tts_analysis_results: list[dict] = []
         self._tts_queue: list[TtsBatchItem] = []
         self._tts_current: TtsBatchItem | None = None
@@ -2291,6 +2292,7 @@ class MainWindow(QMainWindow):
         self._tts_extracting = False
         self._tts_asset_id = asset.id
         self._tts_analysis_queue = items
+        self._tts_analysis_request_id = None
         self._tts_analysis_results = []
         self._tts_queue = []
         self._update_tts_buttons()
@@ -2317,15 +2319,29 @@ class MainWindow(QMainWindow):
         self.status_message.setText(
             f"INDEXTTS2 · 正在检查文本 {complete}/{total}"
         )
-        self.index_tts.analyze_text(self._tts_analysis_current.text)
+        self._tts_analysis_request_id = self.index_tts.analyze_text(
+            self._tts_analysis_current.text
+        )
 
     def _tts_text_analyzed(self, message: dict) -> None:
         if not self._tts_busy or not self._tts_analysis_current:
+            return
+        if message.get("id") != self._tts_analysis_request_id:
+            LOGGER.debug(
+                "Ignoring stale IndexTTS text analysis response %r; expected %r",
+                message.get("id"),
+                self._tts_analysis_request_id,
+            )
+            return
+        analyzed_text = str(message.get("text") or "").strip()
+        if analyzed_text != self._tts_analysis_current.text.strip():
+            self._tts_failed("IndexTTS2 返回的文本分析结果与当前字幕不一致。")
             return
         self._tts_analysis_results.append(
             {"item": self._tts_analysis_current, **message}
         )
         self._tts_analysis_current = None
+        self._tts_analysis_request_id = None
         self._start_next_tts_analysis()
 
     def _finish_tts_analysis(self) -> None:
@@ -2346,8 +2362,21 @@ class MainWindow(QMainWindow):
         )
         warnings = []
         if unknown:
+            unknown_tokens: list[str] = []
+            for result in self._tts_analysis_results:
+                for token in result.get("unknown_tokens", []):
+                    token = str(token)
+                    if token and token not in unknown_tokens:
+                        unknown_tokens.append(token)
+            detail = ""
+            if unknown_tokens:
+                shown = "、".join(unknown_tokens[:12])
+                remaining = len(unknown_tokens) - 12
+                detail = f"\n无法编码的字符或符号：{shown}"
+                if remaining > 0:
+                    detail += f" 等另外 {remaining} 个"
             warnings.append(
-                f"字幕中检测到 {unknown} 个未知 Token，日文等文本可能发音异常。"
+                f"字幕中检测到 {unknown} 个当前引擎无法编码的 Token。{detail}"
             )
         if short:
             warnings.append(f"{short} 个参考片段短于 3 秒，音色稳定性可能较差。")
@@ -2562,6 +2591,7 @@ class MainWindow(QMainWindow):
         self._tts_extracting = False
         self._tts_analysis_queue.clear()
         self._tts_analysis_current = None
+        self._tts_analysis_request_id = None
         self._tts_analysis_results.clear()
         self._tts_queue.clear()
         self._tts_current = None
