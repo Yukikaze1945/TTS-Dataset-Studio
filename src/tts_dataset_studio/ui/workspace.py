@@ -5,8 +5,10 @@ from PySide6.QtWidgets import (
     QFrame,
     QHBoxLayout,
     QLabel,
+    QMenu,
     QProgressBar,
     QPushButton,
+    QToolButton,
     QVBoxLayout,
     QWidget,
 )
@@ -159,6 +161,7 @@ class ContextActionBar(QFrame):
     transcribe_requested = Signal()
     generate_requested = Signal()
     export_requested = Signal()
+    process_requested = Signal(str)
     delete_requested = Signal()
     edit_requested = Signal()
 
@@ -176,6 +179,23 @@ class ContextActionBar(QFrame):
         self.edit_button = self._button("编辑", "", self.edit_requested)
         self.asr_button = self._button("识别字幕", "", self.transcribe_requested)
         self.tts_button = self._button("生成语音", "G", self.generate_requested)
+        self.process_button = QToolButton()
+        self.process_button.setText("处理音频")
+        self.process_button.setObjectName("secondaryAction")
+        self.process_button.setPopupMode(
+            QToolButton.ToolButtonPopupMode.InstantPopup
+        )
+        process_menu = QMenu(self.process_button)
+        for text, engine in (
+            ("快速降噪 · DPDFNet", "dpdfnet"),
+            ("去除 BGM · BS-RoFormer", "separator"),
+            ("录音室修复（实验）· StuPASE", "stupase"),
+        ):
+            action = process_menu.addAction(text)
+            action.triggered.connect(
+                lambda _checked=False, value=engine: self.process_requested.emit(value)
+            )
+        self.process_button.setMenu(process_menu)
         self.delete_button = self._button("删除", "X", self.delete_requested)
         self.export_button = self._button("导出", "E", self.export_requested, primary=True)
         self.asr_button.setObjectName("secondaryAction")
@@ -186,6 +206,7 @@ class ContextActionBar(QFrame):
             self.edit_button,
             self.asr_button,
             self.tts_button,
+            self.process_button,
             self.delete_button,
             self.export_button,
         ):
@@ -210,6 +231,7 @@ class ContextActionBar(QFrame):
         is_generated = kind == "generated"
         self.asr_button.setVisible(not is_generated)
         self.tts_button.setVisible(not is_generated)
+        self.process_button.setVisible(not is_generated)
         self.export_button.setVisible(not is_generated)
         self.edit_button.setVisible(kind == "cue")
         self.delete_button.setVisible(kind in {"region", "generated", "cue"})

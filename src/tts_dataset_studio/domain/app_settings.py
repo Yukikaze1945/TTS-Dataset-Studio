@@ -5,10 +5,14 @@ import sys
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
+from platformdirs import user_data_path
 from PySide6.QtCore import QSettings
 
 MOSS_HOME_ENV = "MOSS_TRANSCRIBE_DIARIZE_HOME"
 INDEX_TTS_HOME_ENV = "INDEX_TTS_HOME"
+DPDFNET_PYTHON_ENV = "DPDFNET_PYTHON"
+AUDIO_SEPARATOR_PYTHON_ENV = "AUDIO_SEPARATOR_PYTHON"
+STUPASE_HOME_ENV = "STUPASE_HOME"
 DEFAULT_MOSS_PROMPT = (
     "\u8bf7\u5c06\u97f3\u9891\u8f6c\u5199\u4e3a\u6587\u672c\uff0c"
     "\u6bcf\u4e00\u6bb5\u9700\u4ee5\u8d77\u59cb\u65f6\u95f4\u6233"
@@ -88,6 +92,66 @@ def detect_index_tts_root() -> Path | None:
             path
             for path in _index_tts_root_candidates()
             if (path / "indextts" / "infer_v2.py").is_file()
+        ),
+        None,
+    )
+
+
+def audio_engine_root() -> Path:
+    return Path(user_data_path("TTS Dataset Studio", "OpenAI")) / "engines"
+
+
+def _engine_python(environment: str, folder: str) -> str:
+    configured = os.environ.get(environment, "").strip()
+    if configured:
+        return str(Path(configured).expanduser())
+    candidates = [
+        audio_engine_root() / folder / ".venv" / "Scripts" / "python.exe",
+        Path.home()
+        / "tts-audio-models"
+        / folder
+        / ".venv"
+        / "Scripts"
+        / "python.exe",
+    ]
+    if os.name == "nt":
+        candidates.extend(
+            drive
+            / "tts-audio-models"
+            / folder
+            / ".venv"
+            / "Scripts"
+            / "python.exe"
+            for drive in _windows_drive_roots()
+        )
+    candidate = next((path for path in candidates if path.is_file()), None)
+    return str(candidate) if candidate else ""
+
+
+def detect_stupase_root() -> Path | None:
+    configured = os.environ.get(STUPASE_HOME_ENV, "").strip()
+    candidates = [Path(configured).expanduser()] if configured else []
+    candidates.extend(
+        [
+            audio_engine_root() / "stupase" / "pase",
+            Path.home() / "pase",
+            Path.home() / "tts-audio-models" / "stupase" / "pase",
+        ]
+    )
+    if os.name == "nt":
+        candidates.extend(
+            candidate
+            for drive in _windows_drive_roots()
+            for candidate in (
+                drive / "pase",
+                drive / "tts-audio-models" / "stupase" / "pase",
+            )
+        )
+    return next(
+        (
+            path
+            for path in candidates
+            if (path / "stupase" / "inference" / "inference.py").is_file()
         ),
         None,
     )
@@ -174,6 +238,18 @@ class AppSettings:
     index_tts_interval_silence: int = 200
     index_tts_temp_dir: str = ""
     unload_index_tts_on_exit: bool = True
+    enhancement_temp_dir: str = ""
+    dpdfnet_python: str = ""
+    dpdfnet_model: str = "dpdfnet8_48khz_hr"
+    dpdfnet_attn_limit_db: float = 12.0
+    separator_python: str = ""
+    separator_model: str = "model_bs_roformer_ep_317_sdr_12.9755.ckpt"
+    separator_model_dir: str = ""
+    separator_use_autocast: bool = True
+    stupase_root: str = ""
+    stupase_python: str = ""
+    stupase_model_dir: str = ""
+    stupase_device: str = "cuda:0"
 
     def __post_init__(self) -> None:
         if not self.moss_root:
@@ -198,6 +274,34 @@ class AppSettings:
             self.index_tts_config = str(index_root / "checkpoints" / "config.yaml")
         if not self.index_tts_model_dir and index_root:
             self.index_tts_model_dir = str(index_root / "checkpoints")
+        if not self.dpdfnet_python:
+            self.dpdfnet_python = _engine_python(
+                DPDFNET_PYTHON_ENV,
+                "dpdfnet",
+            )
+        if not self.separator_python:
+            self.separator_python = _engine_python(
+                AUDIO_SEPARATOR_PYTHON_ENV,
+                "audio-separator",
+            )
+        if not self.separator_model_dir and self.separator_python:
+            separator_python = Path(self.separator_python)
+            if len(separator_python.parents) >= 3:
+                self.separator_model_dir = str(
+                    separator_python.parents[2] / "models"
+                )
+        if not self.stupase_root:
+            detected_stupase = detect_stupase_root()
+            if detected_stupase:
+                self.stupase_root = str(detected_stupase)
+        if not self.stupase_python and self.stupase_root:
+            self.stupase_python = str(
+                Path(self.stupase_root).parent / ".venv" / "Scripts" / "python.exe"
+            )
+        if not self.stupase_model_dir and self.stupase_root:
+            self.stupase_model_dir = str(
+                Path(self.stupase_root).parent / "models"
+            )
 
     @classmethod
     def load(cls, store: QSettings) -> AppSettings:

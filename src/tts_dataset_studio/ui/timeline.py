@@ -74,8 +74,8 @@ class WaveformDbScale(QWidget):
 
     source_mute_clicked = Signal()
     source_solo_clicked = Signal()
-    generated_mute_clicked = Signal()
-    generated_solo_clicked = Signal()
+    generated_mute_clicked = Signal(str)
+    generated_solo_clicked = Signal(str)
 
     WIDTH = 92
 
@@ -143,17 +143,32 @@ class WaveformDbScale(QWidget):
         if not asset:
             return
         source_y = TimelineCanvas.HEADER + 5
-        ai_y = TimelineCanvas.HEADER + self.timeline.waveform_height + 5
         painter.setFont(QFont("Consolas", 7, QFont.Weight.Bold))
         painter.setPen(QColor("#9fb0c0"))
         painter.drawText(QRectF(4, source_y, 42, 20), Qt.AlignmentFlag.AlignVCenter, "SOURCE")
-        painter.drawText(QRectF(4, ai_y, 42, 20), Qt.AlignmentFlag.AlignVCenter, "AI")
         states = [
             ("M", asset.source_muted, QRectF(49, source_y, 18, 20)),
             ("S", asset.source_solo, QRectF(70, source_y, 18, 20)),
-            ("M", asset.generated_track.muted, QRectF(49, ai_y, 18, 20)),
-            ("S", asset.generated_track.solo, QRectF(70, ai_y, 18, 20)),
         ]
+        for index, track in enumerate(asset.generated_audio_tracks):
+            track_y = (
+                TimelineCanvas.HEADER
+                + self.timeline.waveform_height
+                + index * TimelineCanvas.TRACK_HEIGHT
+                + 5
+            )
+            label = "增强" if track.kind == "enhancement" else "AI"
+            painter.drawText(
+                QRectF(4, track_y, 42, 20),
+                Qt.AlignmentFlag.AlignVCenter,
+                label,
+            )
+            states.extend(
+                [
+                    ("M", track.muted, QRectF(49, track_y, 18, 20)),
+                    ("S", track.solo, QRectF(70, track_y, 18, 20)),
+                ]
+            )
         for text, active, rect in states:
             painter.setBrush(QColor("#d99135" if active else "#1d2a36"))
             painter.setPen(QPen(QColor("#ffc36b" if active else "#415466"), 1))
@@ -167,15 +182,24 @@ class WaveformDbScale(QWidget):
         y = event.position().y()
         x = event.position().x()
         source_y = TimelineCanvas.HEADER + 5
-        ai_y = TimelineCanvas.HEADER + self.timeline.waveform_height + 5
         if 49 <= x <= 67 and source_y <= y <= source_y + 20:
             self.source_mute_clicked.emit()
         elif 70 <= x <= 88 and source_y <= y <= source_y + 20:
             self.source_solo_clicked.emit()
-        elif 49 <= x <= 67 and ai_y <= y <= ai_y + 20:
-            self.generated_mute_clicked.emit()
-        elif 70 <= x <= 88 and ai_y <= y <= ai_y + 20:
-            self.generated_solo_clicked.emit()
+        else:
+            for index, track in enumerate(self.timeline.asset.generated_audio_tracks):
+                track_y = (
+                    TimelineCanvas.HEADER
+                    + self.timeline.waveform_height
+                    + index * TimelineCanvas.TRACK_HEIGHT
+                    + 5
+                )
+                if 49 <= x <= 67 and track_y <= y <= track_y + 20:
+                    self.generated_mute_clicked.emit(track.id)
+                    break
+                if 70 <= x <= 88 and track_y <= y <= track_y + 20:
+                    self.generated_solo_clicked.emit(track.id)
+                    break
         self.update()
 
 
@@ -324,7 +348,9 @@ class TimelineCanvas(QWidget):
         self.update()
 
     def _resize_for_content(self) -> None:
-        track_count = len(self._visible_subtitle_tracks()) + 1
+        track_count = len(self._visible_subtitle_tracks()) + len(
+            self._generated_tracks()
+        )
         height = (
             self.HEADER
             + self.waveform_height
@@ -340,11 +366,25 @@ class TimelineCanvas(QWidget):
             return []
         return [track for track in self.asset.subtitle_tracks if track.visible]
 
+    def _generated_tracks(self):
+        return self.asset.generated_audio_tracks if self.asset else []
+
+    def _generated_track_for_clip(self, clip_id: str):
+        if not self.asset:
+            return None
+        return self.asset.track_for_clip(clip_id)
+
+    def _generated_clip(self, clip_id: str) -> GeneratedAudioClip | None:
+        track = self._generated_track_for_clip(clip_id)
+        if not track:
+            return None
+        return next((clip for clip in track.clips if clip.id == clip_id), None)
+
     def _timeline_duration(self) -> int:
         if not self.asset:
             return 10_000
         generated_end = max(
-            (clip.end_ms for clip in self.asset.generated_track.clips),
+            (clip.end_ms for clip in self.asset.generated_clips()),
             default=0,
         )
         return max(1, self.asset.duration_ms, generated_end)
@@ -368,7 +408,7 @@ class TimelineCanvas(QWidget):
         self._paint_ruler(painter)
         self._paint_waveform(painter)
         self._paint_regions(painter)
-        self._paint_generated_track(painter)
+        self._paint_generated_tracks(painter)
         self._paint_subtitles(painter)
         self._paint_waveform_resize_handle(painter)
         x = self._x_for_ms(self.playhead_ms)
@@ -487,7 +527,11 @@ class TimelineCanvas(QWidget):
             painter.drawLine(right, self.HEADER, right, self.height())
 
     def _paint_subtitles(self, painter: QPainter) -> None:
-        top = self.HEADER + self.waveform_height + self.TRACK_HEIGHT
+        top = (
+            self.HEADER
+            + self.waveform_height
+            + len(self._generated_tracks()) * self.TRACK_HEIGHT
+        )
         for track_index, track in enumerate(self._visible_subtitle_tracks()):
             row_top = top + track_index * self.TRACK_HEIGHT
             painter.fillRect(
@@ -511,15 +555,24 @@ class TimelineCanvas(QWidget):
                 )
                 painter.setClipping(False)
 
-    def _paint_generated_track(self, painter: QPainter) -> None:
+    def _paint_generated_tracks(self, painter: QPainter) -> None:
         if not self.asset:
             return
-        row_top = self.HEADER + self.waveform_height
+        for track_index, track in enumerate(self._generated_tracks()):
+            row_top = (
+                self.HEADER
+                + self.waveform_height
+                + track_index * self.TRACK_HEIGHT
+            )
+            self._paint_generated_track(painter, track, row_top)
+
+    def _paint_generated_track(self, painter: QPainter, track, row_top: int) -> None:
+        is_enhancement = track.kind == "enhancement"
         painter.fillRect(
             QRectF(0, row_top, self.width(), self.TRACK_HEIGHT - 1),
-            QColor("#151c26"),
+            QColor("#13211f" if is_enhancement else "#151c26"),
         )
-        for clip in self.asset.generated_track.clips:
+        for clip in track.clips:
             left = self._x_for_ms(clip.start_ms)
             right = max(left + 5, self._x_for_ms(clip.end_ms))
             selected = clip.id in self.selected_generated_clip_ids
@@ -530,14 +583,24 @@ class TimelineCanvas(QWidget):
                 self.TRACK_HEIGHT - 9,
             )
             online = Path(clip.path).is_file()
-            painter.setBrush(QColor("#9a6128" if selected else "#533d2c"))
-            painter.setPen(QPen(QColor("#ffc36b" if selected else "#98724e"), 1))
+            if is_enhancement:
+                fill = "#247b70" if selected else "#244740"
+                outline = "#7ee3cf" if selected else "#477c72"
+                waveform = "#9df1df"
+                text_color = "#edfffb"
+            else:
+                fill = "#9a6128" if selected else "#533d2c"
+                outline = "#ffc36b" if selected else "#98724e"
+                waveform = "#ffd08a"
+                text_color = "#fff2df"
+            painter.setBrush(QColor(fill))
+            painter.setPen(QPen(QColor(outline), 1))
             painter.drawRoundedRect(rect, 4, 4)
             peaks = self.generated_peaks.get(clip.id, [])
             if peaks:
                 center = rect.center().y()
                 height = rect.height() * 0.37
-                painter.setPen(QPen(QColor("#ffd08a"), 1))
+                painter.setPen(QPen(QColor(waveform), 1))
                 for index, peak in enumerate(peaks):
                     x = rect.left() + index / max(1, len(peaks) - 1) * rect.width()
                     amplitude = min(1.0, peak) * height
@@ -547,7 +610,7 @@ class TimelineCanvas(QWidget):
                         round(x),
                         round(center + amplitude),
                     )
-            painter.setPen(QColor("#fff2df" if online else "#ff7676"))
+            painter.setPen(QColor(text_color if online else "#ff7676"))
             painter.setClipRect(rect.adjusted(5, 0, -3, 0))
             painter.drawText(
                 rect.adjusted(5, 0, -3, 0),
@@ -562,8 +625,12 @@ class TimelineCanvas(QWidget):
         x_ms = self._ms_for_x(pos.x())
         tolerance_ms = round(7 / self.pixels_per_second * 1000)
         generated_top = self.HEADER + self.waveform_height
-        if generated_top <= pos.y() < generated_top + self.TRACK_HEIGHT:
-            for clip in reversed(self.asset.generated_track.clips):
+        generated_tracks = self._generated_tracks()
+        generated_bottom = generated_top + len(generated_tracks) * self.TRACK_HEIGHT
+        if generated_top <= pos.y() < generated_bottom:
+            track_index = (pos.y() - generated_top) // self.TRACK_HEIGHT
+            track = generated_tracks[track_index]
+            for clip in reversed(track.clips):
                 if clip.start_ms - tolerance_ms <= x_ms <= clip.end_ms + tolerance_ms:
                     edge = (
                         "left"
@@ -577,7 +644,7 @@ class TimelineCanvas(QWidget):
                     ):
                         edge = "body"
                     return "generated", clip.id, edge
-        subtitle_top = generated_top + self.TRACK_HEIGHT
+        subtitle_top = generated_bottom
         if pos.y() >= subtitle_top:
             track_index = (pos.y() - subtitle_top) // self.TRACK_HEIGHT
             visible_tracks = self._visible_subtitle_tracks()
@@ -645,11 +712,9 @@ class TimelineCanvas(QWidget):
                 cue.end_ms,
             )
         elif kind == "generated":
-            clip = next(
-                clip
-                for clip in self.asset.generated_track.clips
-                if clip.id == item_id
-            )
+            clip = self._generated_clip(item_id)
+            if clip is None:
+                return
             selected = True
             if additive:
                 if item_id in self.selected_generated_clip_ids:
@@ -742,11 +807,9 @@ class TimelineCanvas(QWidget):
         elif self._drag.kind == "region":
             item = next(region for region in self.asset.regions if region.id == self._drag.item_id)
         else:
-            clip = next(
-                clip
-                for clip in self.asset.generated_track.clips
-                if clip.id == self._drag.item_id
-            )
+            clip = self._generated_clip(self._drag.item_id)
+            if clip is None:
+                return
             if self._drag.edge == "body":
                 clip.start_ms = max(
                     0,
@@ -818,11 +881,7 @@ class TimelineCanvas(QWidget):
             elif drag.kind == "region" and self.asset:
                 item = next(region for region in self.asset.regions if region.id == drag.item_id)
             elif self.asset:
-                item = next(
-                    clip
-                    for clip in self.asset.generated_track.clips
-                    if clip.id == drag.item_id
-                )
+                item = self._generated_clip(drag.item_id)
             else:
                 item = None
             self._drag = None
@@ -833,11 +892,12 @@ class TimelineCanvas(QWidget):
                     drag.end_ms - drag.start_ms,
                 )
                 after = (item.start_ms, item.source_offset_ms, item.duration_ms)
-                collision = any(
+                track = self._generated_track_for_clip(item.id)
+                collision = bool(track) and any(
                     other.id != item.id
                     and item.start_ms < other.end_ms
                     and other.start_ms < item.end_ms
-                    for other in self.asset.generated_track.clips
+                    for other in track.clips
                 )
                 if collision:
                     item.start_ms, item.source_offset_ms, item.duration_ms = before

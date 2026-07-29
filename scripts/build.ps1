@@ -22,6 +22,7 @@ foreach ($required in @($ffmpeg, $ffprobe, $mpvExecutable)) {
 }
 $worker = Join-Path $projectRoot "src\tts_dataset_studio\workers\moss_worker.py"
 $indexTtsWorker = Join-Path $projectRoot "src\tts_dataset_studio\workers\index_tts_worker.py"
+$audioEnhancementWorker = Join-Path $projectRoot "src\tts_dataset_studio\workers\audio_enhancement_worker.py"
 $arguments = @(
   "--noconfirm",
   "--clean",
@@ -35,6 +36,7 @@ $arguments = @(
   "--add-binary", "$mpvExecutable;.",
   "--add-data", "$worker;workers",
   "--add-data", "$indexTtsWorker;workers",
+  "--add-data", "$audioEnhancementWorker;workers",
   "src/tts_dataset_studio/__main__.py"
 )
 uv run pyinstaller @arguments

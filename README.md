@@ -25,6 +25,7 @@ TTS Dataset Studio 是一个面向 Windows 的轻量 TTS 素材截取与字幕�
 - 字幕文本自动命名音频并可生成同名 UTF-8 TXT。
 - D/F 逐帧移动、C 保存原视频静帧、Windows 右键菜单安装。
 - 可选接入 MOSS-Transcribe-Diarize，对选中区间生成时间戳和说话人字幕。
+- 可选 DPDFNet 降噪、BS-RoFormer 去 BGM 和 StuPASE 录音室修复；结果进入独立增强音轨。
 
 ## 安装
 
@@ -121,6 +122,32 @@ index-tts/
 .\scripts\index-tts-smoke.ps1 -IndexTtsRoot X:\index-tts
 ```
 
+## 音频处理引擎（可选）
+
+选择一个或多个区间后，点击上下文栏的“处理音频”：
+
+- **快速降噪**：[DPDFNet](https://github.com/ceva-ip/DPDFNet)
+  `dpdfnet8_48khz_hr`，48 kHz CPU/ONNX 推理。
+- **去除 BGM**：BS-RoFormer，通过
+  [python-audio-separator](https://github.com/nomadkaraoke/python-audio-separator)
+  使用 CUDA 推理。
+- **录音室修复（实验）**：[StuPASE](https://github.com/cisco-open/pase)，
+  同时处理噪声与混响，但生成式重建可能改变音色。
+
+处理后的 WAV 会放到独立“增强音轨”，原素材不会被覆盖。源轨、AI 生成轨和增强轨各自支持
+Mute/Solo，可直接做 A/B 试听。工程保存后，增强文件与生成语音一样进入
+`.ttds.assets/generated`。
+
+模型与 PyTorch 不包含在下载包中。软件会自动检测：
+
+1. `DPDFNET_PYTHON`、`AUDIO_SEPARATOR_PYTHON`、`STUPASE_HOME` 环境变量。
+2. 应用数据目录下的 `engines`。
+3. 用户目录或任意固定磁盘的 `tts-audio-models`。
+4. “设置 → AI 引擎 → 音频处理”中的手动路径。
+
+DPDFNet 和 BS-RoFormer 保持 48 kHz 输出。StuPASE 当前为 16 kHz 生成式模型，建议只用于
+抢救低质量片段，并始终与原声比较后再决定是否用于训练。
+
 ## 开发与测试
 
 ```powershell
@@ -142,8 +169,9 @@ uv run pytest
 - 单个时间线只打开一个源素材，不支持素材拼接、转场或视频成片导出。
 - MOSS ASR 依赖用户自己的 Python/CUDA/模型环境。
 - IndexTTS2 依赖用户自己的 Python/CUDA/模型环境；便携版只包含协议 worker。
+- 三个音频处理引擎均为可选外部环境；首次使用可能需要下载数百 MB 至数 GB 权重。
 - PGS、VobSub、DVB 等图片型内嵌字幕需要 OCR，当前版本只自动导入文本型字幕。
-- V1 不包含降噪、说话人分离、质量评分和训练框架专用 metadata。
+- V1 不包含说话人分离、质量评分和训练框架专用 metadata。
 
 ## 许可证
 

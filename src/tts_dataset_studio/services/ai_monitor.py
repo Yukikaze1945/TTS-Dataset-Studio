@@ -7,13 +7,29 @@ from tts_dataset_studio.domain.models import MediaAsset
 from tts_dataset_studio.services.media import ToolPaths
 
 
+def audible_generated_tracks(asset: MediaAsset):
+    any_solo = asset.source_solo or any(
+        track.solo for track in asset.generated_audio_tracks
+    )
+    return [
+        track
+        for track in asset.generated_audio_tracks
+        if not track.muted and (not any_solo or track.solo)
+    ]
+
+
 def build_ai_monitor_cache(
     asset: MediaAsset,
     destination: Path,
     tools: ToolPaths | None = None,
 ) -> Path:
     tools = tools or ToolPaths.discover()
-    clips = [clip for clip in asset.generated_track.clips if Path(clip.path).is_file()]
+    clips = [
+        clip
+        for track in audible_generated_tracks(asset)
+        for clip in track.clips
+        if Path(clip.path).is_file()
+    ]
     duration_ms = max(
         asset.duration_ms,
         max((clip.end_ms for clip in clips), default=0),

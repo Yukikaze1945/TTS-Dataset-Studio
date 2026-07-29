@@ -92,6 +92,7 @@ class GeneratedAudioTrack:
     clips: list[GeneratedAudioClip] = field(default_factory=list)
     muted: bool = True
     solo: bool = False
+    kind: str = "generated"
     id: str = field(default_factory=new_id)
 
 
@@ -138,9 +139,38 @@ class MediaAsset:
 
     @property
     def generated_track(self) -> GeneratedAudioTrack:
-        if not self.generated_audio_tracks:
-            self.generated_audio_tracks.append(GeneratedAudioTrack())
-        return self.generated_audio_tracks[0]
+        for track in self.generated_audio_tracks:
+            if track.kind == "generated":
+                return track
+        track = GeneratedAudioTrack()
+        self.generated_audio_tracks.insert(0, track)
+        return track
+
+    @property
+    def enhancement_track(self) -> GeneratedAudioTrack:
+        for track in self.generated_audio_tracks:
+            if track.kind == "enhancement":
+                return track
+        track = GeneratedAudioTrack(name="增强音轨", kind="enhancement")
+        self.generated_audio_tracks.append(track)
+        return track
+
+    def track_for_clip(self, clip_id: str) -> GeneratedAudioTrack | None:
+        return next(
+            (
+                track
+                for track in self.generated_audio_tracks
+                if any(clip.id == clip_id for clip in track.clips)
+            ),
+            None,
+        )
+
+    def generated_clips(self) -> list[GeneratedAudioClip]:
+        return [
+            clip
+            for track in self.generated_audio_tracks
+            for clip in track.clips
+        ]
 
 
 @dataclass(slots=True)

@@ -257,6 +257,7 @@ class AdvancedSettingsDialog(QDialog):
         tabs = QTabWidget()
         tabs.addTab(self._build_asr_tab(), "语音识别")
         tabs.addTab(self._build_index_tts_tab(), "语音生成")
+        tabs.addTab(self._build_audio_processing_tab(), "音频处理")
         return tabs
 
     def _build_asr_tab(self) -> QWidget:
@@ -370,6 +371,68 @@ class AdvancedSettingsDialog(QDialog):
         scroll.setWidget(tab)
         return scroll
 
+    def _build_audio_processing_tab(self) -> QWidget:
+        tab = QWidget()
+        form = QFormLayout(tab)
+        note = QLabel(
+            "三个引擎都在外部独立环境中运行，下载版不会内置模型。"
+            "处理结果只会加入“增强音轨”，不会覆盖原素材。"
+        )
+        note.setWordWrap(True)
+        self.enhancement_temp = QLineEdit()
+        form.addRow("说明", note)
+        form.addRow("临时目录", self._path_row(self.enhancement_temp))
+
+        self.dpdfnet_python = QLineEdit()
+        self.dpdfnet_model = QComboBox()
+        self.dpdfnet_model.addItems(
+            ["dpdfnet8_48khz_hr", "dpdfnet2_48khz_hr"]
+        )
+        self.dpdfnet_limit = QDoubleSpinBox()
+        self.dpdfnet_limit.setRange(0.0, 30.0)
+        self.dpdfnet_limit.setSuffix(" dB")
+        dpdfnet_test = QPushButton("检测 DPDFNet")
+        dpdfnet_test.clicked.connect(self._test_dpdfnet_environment)
+        form.addRow(QLabel("快速降噪 · DPDFNet"))
+        form.addRow("Python", self.dpdfnet_python)
+        form.addRow("模型", self.dpdfnet_model)
+        form.addRow("抑制上限", self.dpdfnet_limit)
+        form.addRow("", dpdfnet_test)
+
+        self.separator_python = QLineEdit()
+        self.separator_model = QLineEdit()
+        self.separator_model_dir = QLineEdit()
+        self.separator_autocast = QCheckBox("使用 CUDA autocast")
+        separator_test = QPushButton("检测 Audio Separator")
+        separator_test.clicked.connect(self._test_separator_environment)
+        form.addRow(QLabel("去除 BGM · BS-RoFormer"))
+        form.addRow("Python", self.separator_python)
+        form.addRow("模型文件名", self.separator_model)
+        form.addRow("模型缓存目录", self._path_row(self.separator_model_dir))
+        form.addRow("", self.separator_autocast)
+        form.addRow("", separator_test)
+
+        self.stupase_root = QLineEdit()
+        self.stupase_python = QLineEdit()
+        self.stupase_model_dir = QLineEdit()
+        self.stupase_device = QComboBox()
+        self.stupase_device.addItems(["cuda:0", "cpu"])
+        warning = QLabel(
+            "StuPASE 是 16 kHz 生成式修复，可能改变齿音、气声和角色音色，"
+            "建议只用于抢救素材并与原声 A/B。"
+        )
+        warning.setWordWrap(True)
+        stupase_test = QPushButton("检测 StuPASE")
+        stupase_test.clicked.connect(self._test_stupase_environment)
+        form.addRow(QLabel("录音室修复（实验）· StuPASE"))
+        form.addRow("仓库目录", self._path_row(self.stupase_root))
+        form.addRow("Python", self.stupase_python)
+        form.addRow("模型目录", self._path_row(self.stupase_model_dir))
+        form.addRow("设备", self.stupase_device)
+        form.addRow("注意", warning)
+        form.addRow("", stupase_test)
+        return self._scroll_page(tab)
+
     @staticmethod
     def _engine_status_text(state: str | None) -> str:
         return {
@@ -444,6 +507,18 @@ class AdvancedSettingsDialog(QDialog):
         self.index_silence.setValue(value.index_tts_interval_silence)
         self.index_temp.setText(value.index_tts_temp_dir)
         self.index_unload_on_exit.setChecked(value.unload_index_tts_on_exit)
+        self.enhancement_temp.setText(value.enhancement_temp_dir)
+        self.dpdfnet_python.setText(value.dpdfnet_python)
+        self.dpdfnet_model.setCurrentText(value.dpdfnet_model)
+        self.dpdfnet_limit.setValue(value.dpdfnet_attn_limit_db)
+        self.separator_python.setText(value.separator_python)
+        self.separator_model.setText(value.separator_model)
+        self.separator_model_dir.setText(value.separator_model_dir)
+        self.separator_autocast.setChecked(value.separator_use_autocast)
+        self.stupase_root.setText(value.stupase_root)
+        self.stupase_python.setText(value.stupase_python)
+        self.stupase_model_dir.setText(value.stupase_model_dir)
+        self.stupase_device.setCurrentText(value.stupase_device)
 
     def value(self) -> AppSettings:
         return replace(
@@ -503,6 +578,18 @@ class AdvancedSettingsDialog(QDialog):
             index_tts_interval_silence=self.index_silence.value(),
             index_tts_temp_dir=self.index_temp.text().strip(),
             unload_index_tts_on_exit=self.index_unload_on_exit.isChecked(),
+            enhancement_temp_dir=self.enhancement_temp.text().strip(),
+            dpdfnet_python=self.dpdfnet_python.text().strip(),
+            dpdfnet_model=self.dpdfnet_model.currentText(),
+            dpdfnet_attn_limit_db=self.dpdfnet_limit.value(),
+            separator_python=self.separator_python.text().strip(),
+            separator_model=self.separator_model.text().strip(),
+            separator_model_dir=self.separator_model_dir.text().strip(),
+            separator_use_autocast=self.separator_autocast.isChecked(),
+            stupase_root=self.stupase_root.text().strip(),
+            stupase_python=self.stupase_python.text().strip(),
+            stupase_model_dir=self.stupase_model_dir.text().strip(),
+            stupase_device=self.stupase_device.currentText(),
         )
 
     def _apply(self) -> None:
@@ -595,6 +682,77 @@ class AdvancedSettingsDialog(QDialog):
                 self,
                 "IndexTTS2 环境检测成功",
                 f"Torch {info['torch']}\nCUDA: {info['cuda']}\nGPU: {info['gpu']}",
+            )
+        except Exception as exc:
+            QMessageBox.critical(self, "环境检测失败", str(exc))
+
+    def _test_dpdfnet_environment(self) -> None:
+        self._test_audio_python(
+            self.dpdfnet_python.text(),
+            "import dpdfnet,onnxruntime,soundfile;"
+            "print('DPDFNet OK · ONNX Runtime '+onnxruntime.__version__)",
+            "DPDFNet",
+        )
+
+    def _test_separator_environment(self) -> None:
+        self._test_audio_python(
+            self.separator_python.text(),
+            "import torch,audio_separator;"
+            "print('Audio Separator OK · CUDA '+str(torch.cuda.is_available()))",
+            "Audio Separator",
+        )
+
+    def _test_stupase_environment(self) -> None:
+        root = Path(self.stupase_root.text().strip())
+        module = root / "stupase" / "inference" / "inference.py"
+        if not module.is_file():
+            QMessageBox.critical(
+                self,
+                "环境检测失败",
+                f"找不到 StuPASE 推理入口：\n{module}",
+            )
+            return
+        self._test_audio_python(
+            self.stupase_python.text(),
+            "import torch,torchaudio;print('StuPASE Python OK · CUDA '+"
+            "str(torch.cuda.is_available()))",
+            "StuPASE",
+            cwd=root,
+        )
+
+    def _test_audio_python(
+        self,
+        python_value: str,
+        code: str,
+        label: str,
+        cwd: Path | None = None,
+    ) -> None:
+        python = Path(python_value)
+        if not python.is_file():
+            QMessageBox.critical(
+                self,
+                "环境检测失败",
+                f"{label} Python 不存在：\n{python if python_value else '尚未配置'}",
+            )
+            return
+        try:
+            process = subprocess.run(
+                [str(python), "-c", code],
+                cwd=str(cwd) if cwd else None,
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                timeout=30,
+                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+                check=False,
+            )
+            if process.returncode:
+                raise RuntimeError(process.stderr.strip() or process.stdout.strip())
+            QMessageBox.information(
+                self,
+                f"{label} 环境检测成功",
+                process.stdout.strip() or "环境可用",
             )
         except Exception as exc:
             QMessageBox.critical(self, "环境检测失败", str(exc))

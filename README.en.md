@@ -24,6 +24,7 @@ subtitle tracks, non-destructive regions, gain control, and FFmpeg export in one
 - Subtitle-based filenames and optional matching UTF-8 TXT files.
 - Frame stepping, clean still-frame export, and an optional Windows context-menu installer.
 - Optional MOSS-Transcribe-Diarize integration for timestamped, speaker-aware transcription.
+- Optional DPDFNet denoising, BS-RoFormer BGM removal, and experimental StuPASE repair.
 
 ## Install
 
@@ -99,6 +100,26 @@ Run the optional local GPU smoke test with:
 .\scripts\index-tts-smoke.ps1 -IndexTtsRoot X:\index-tts
 ```
 
+## Optional audio enhancement engines
+
+Select one or more regions and open **Process audio** in the contextual action bar:
+
+- **Quick denoise** uses the 48 kHz
+  [DPDFNet](https://github.com/ceva-ip/DPDFNet)
+  `dpdfnet8_48khz_hr` CPU/ONNX model.
+- **Remove BGM** uses BS-RoFormer through
+  [python-audio-separator](https://github.com/nomadkaraoke/python-audio-separator)
+  with CUDA.
+- **Studio repair (experimental)** uses
+  [StuPASE](https://github.com/cisco-open/pase) for combined noise and reverb repair.
+
+Results are added to a separate **Enhancement** track; source media is never overwritten.
+Source, generated, and enhancement tracks have independent Mute/Solo controls for A/B monitoring.
+The optional environments and model weights are not bundled. Configure them under Settings →
+AI Engines → Audio Processing, or use `DPDFNET_PYTHON`, `AUDIO_SEPARATOR_PYTHON`, and
+`STUPASE_HOME`. StuPASE is currently a 16 kHz generative model and can change speaker detail,
+so compare its result with the source before using it for training.
+
 ## Development
 
 ```powershell
@@ -116,9 +137,10 @@ uv run pytest
 - MOSS ASR requires a separately installed Python/CUDA/model environment.
 - IndexTTS2 requires a separately installed Python/CUDA/model environment; only the protocol
   worker is included in portable builds.
+- Audio enhancement engines require separate Python/model environments and may download several
+  gigabytes on first use.
 - Image-based embedded subtitles such as PGS, VobSub, and DVB require OCR and are not imported.
-- Noise reduction, diarization pipelines, quality scoring, and framework-specific metadata are
-  outside the V1 scope.
+- Speaker-separation pipelines, quality scoring, and framework-specific metadata are outside V1.
 
 ## License
 

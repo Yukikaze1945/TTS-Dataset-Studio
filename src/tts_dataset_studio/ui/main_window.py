@@ -74,6 +74,11 @@ from tts_dataset_studio.domain.models import (
 from tts_dataset_studio.services.ai_monitor import build_ai_monitor_cache
 from tts_dataset_studio.services.asr_audio import extract_asr_audio
 from tts_dataset_studio.services.asr_controller import AsrController
+from tts_dataset_studio.services.audio_enhancement import (
+    ENGINE_LABELS,
+    extract_region_audio,
+    run_engine,
+)
 from tts_dataset_studio.services.exporter import ExportResult, export_region
 from tts_dataset_studio.services.index_tts_controller import IndexTtsController
 from tts_dataset_studio.services.media import MEDIA_EXTENSIONS, ToolPaths, probe_media
@@ -285,6 +290,76 @@ class TtsReferenceTask(QRunnable):
             self.signals.failed.emit(str(exc))
 
 
+@dataclass(slots=True)
+class EnhancementBatchItem:
+    region: ExportRegion
+    text: str
+    clip_id: str = field(default_factory=new_id)
+
+
+class EnhancementWorker(QThread):
+    progress = Signal(int)
+    item_completed = Signal(object)
+    completed = Signal()
+    failed = Signal(str)
+    cancelled = Signal()
+
+    def __init__(
+        self,
+        asset: MediaAsset,
+        items: list[EnhancementBatchItem],
+        engine: str,
+        settings: AppSettings,
+        work_folder: Path,
+        destination_folder: Path,
+    ) -> None:
+        super().__init__()
+        self.asset = copy.deepcopy(asset)
+        self.items = copy.deepcopy(items)
+        self.engine = engine
+        self.settings = copy.deepcopy(settings)
+        self.work_folder = work_folder
+        self.destination_folder = destination_folder
+        self.cancel_event = Event()
+
+    def run(self) -> None:
+        try:
+            total = len(self.items)
+            self.work_folder.mkdir(parents=True, exist_ok=True)
+            self.destination_folder.mkdir(parents=True, exist_ok=True)
+            for index, item in enumerate(self.items, start=1):
+                if self.cancel_event.is_set():
+                    raise InterruptedError
+                item_folder = self.work_folder / f"{index:04d}"
+                source = extract_region_audio(
+                    self.asset,
+                    item.region,
+                    item_folder / "source.wav",
+                )
+                output = item_folder / "enhanced.wav"
+                run_engine(
+                    self.settings,
+                    self.engine,
+                    source,
+                    output,
+                    self.cancel_event,
+                )
+                destination = self.destination_folder / f"{item.clip_id}.wav"
+                temporary = destination.with_name(destination.name + ".tmp")
+                shutil.copy2(output, temporary)
+                temporary.replace(destination)
+                self.item_completed.emit((item, destination))
+                self.progress.emit(round(index / max(1, total) * 100))
+            self.completed.emit()
+        except InterruptedError:
+            self.cancelled.emit()
+        except Exception as exc:  # noqa: BLE001
+            self.failed.emit(str(exc))
+
+    def cancel(self) -> None:
+        self.cancel_event.set()
+
+
 class GeneratedWaveformTask(QRunnable):
     def __init__(self, clip: GeneratedAudioClip) -> None:
         super().__init__()
@@ -363,6 +438,10 @@ class MainWindow(QMainWindow):
         self._tts_analysis_results: list[dict] = []
         self._tts_queue: list[TtsBatchItem] = []
         self._tts_current: TtsBatchItem | None = None
+        self.enhancement_worker: EnhancementWorker | None = None
+        self._enhancement_asset_id: str | None = None
+        self._enhancement_engine = ""
+        self._enhancement_temp_folder: Path | None = None
         self._ai_monitor_token = 0
         self.undo_stack = QUndoStack(self)
         self.tools: ToolPaths | None = None
@@ -452,6 +531,7 @@ class MainWindow(QMainWindow):
         self.context_bar.play_requested.connect(self._play_selection)
         self.context_bar.transcribe_requested.connect(self._toggle_asr_transcription)
         self.context_bar.generate_requested.connect(self._toggle_tts_generation)
+        self.context_bar.process_requested.connect(self._start_audio_enhancement)
         self.context_bar.export_requested.connect(self.quick_export)
         self.context_bar.delete_requested.connect(self._delete_region)
         self.context_bar.edit_requested.connect(self._show_property_drawer)
@@ -571,7 +651,10 @@ class MainWindow(QMainWindow):
         )
 
     def _cancel_active_task(self) -> None:
-        if self.export_worker and self.export_worker.isRunning():
+        if self.enhancement_worker and self.enhancement_worker.isRunning():
+            self.enhancement_worker.cancel()
+            self.task_notice.message.setText("正在取消音频处理…")
+        elif self.export_worker and self.export_worker.isRunning():
             self._cancel_export()
         elif self._asr_busy:
             self._cancel_asr_batch()
@@ -930,10 +1013,10 @@ class MainWindow(QMainWindow):
             lambda: self._toggle_track_monitor("source", "solo")
         )
         self.waveform_db_scale.generated_mute_clicked.connect(
-            lambda: self._toggle_track_monitor("generated", "mute")
+            lambda track_id: self._toggle_track_monitor(track_id, "mute")
         )
         self.waveform_db_scale.generated_solo_clicked.connect(
-            lambda: self._toggle_track_monitor("generated", "solo")
+            lambda track_id: self._toggle_track_monitor(track_id, "solo")
         )
         self.waveform_db_scale.installEventFilter(self.timeline_scroll)
         timeline_row.addWidget(self.waveform_db_scale)
@@ -1095,7 +1178,7 @@ class MainWindow(QMainWindow):
             self.media_info.setText("MISSING MEDIA · 需要重新定位")
         peaks = self.waveforms.get(asset.id, [])
         self.timeline.set_asset(asset, peaks)
-        for clip in asset.generated_track.clips:
+        for clip in asset.generated_clips():
             cached = self.generated_waveforms.get(clip.id)
             if cached:
                 self.timeline.set_generated_waveform(clip.id, cached)
@@ -1140,7 +1223,7 @@ class MainWindow(QMainWindow):
         self.generated_waveforms[clip_id] = peaks
         asset = self.project.active_asset
         if asset and any(
-            clip.id == clip_id for clip in asset.generated_track.clips
+            clip.id == clip_id for clip in asset.generated_clips()
         ):
             self.timeline.set_generated_waveform(clip_id, peaks)
 
@@ -1156,7 +1239,7 @@ class MainWindow(QMainWindow):
         self._ai_monitor_token += 1
         token = self._ai_monitor_token
         self.player_widget.clear_ai_monitor()
-        if not asset or not asset.generated_track.clips:
+        if not asset or not asset.generated_clips():
             return
         destination = self._monitor_cache_dir() / f"{asset.id}-{token}.flac"
         task = AiMonitorTask(asset, destination, token)
@@ -1186,12 +1269,16 @@ class MainWindow(QMainWindow):
         if not asset:
             self.player_widget.set_track_monitor(True, False)
             return
-        track = asset.generated_track
-        any_solo = asset.source_solo or track.solo
+        any_solo = asset.source_solo or any(
+            track.solo for track in asset.generated_audio_tracks
+        )
         source_audible = not asset.source_muted and (
             not any_solo or asset.source_solo
         )
-        ai_audible = not track.muted and (not any_solo or track.solo)
+        ai_audible = any(
+            not track.muted and (not any_solo or track.solo)
+            for track in asset.generated_audio_tracks
+        )
         self.player_widget.set_track_monitor(source_audible, ai_audible)
         if hasattr(self, "waveform_db_scale"):
             self.waveform_db_scale.update()
@@ -1204,9 +1291,19 @@ class MainWindow(QMainWindow):
             target = asset
             attribute = "source_muted" if control == "mute" else "source_solo"
         else:
-            target = asset.generated_track
+            target = next(
+                (
+                    track
+                    for track in asset.generated_audio_tracks
+                    if track.id == track_name
+                ),
+                None,
+            )
+            if target is None:
+                return
             attribute = "muted" if control == "mute" else "solo"
         setattr(target, attribute, not bool(getattr(target, attribute)))
+        self._schedule_ai_monitor()
         self._apply_track_monitor()
         self._mark_dirty()
 
@@ -1415,7 +1512,7 @@ class MainWindow(QMainWindow):
         if not asset:
             return
         self.selected_generated_clip_ids.intersection_update(
-            clip.id for clip in asset.generated_track.clips
+            clip.id for clip in asset.generated_clips()
         )
         self.timeline.set_asset(asset, self.waveforms.get(asset.id, []))
         self.timeline.selected_region_ids = set(self.selected_region_ids)
@@ -1427,7 +1524,7 @@ class MainWindow(QMainWindow):
             iter(self.selected_generated_clip_ids),
             None,
         )
-        for clip in asset.generated_track.clips:
+        for clip in asset.generated_clips():
             peaks = self.generated_waveforms.get(clip.id)
             if peaks:
                 self.timeline.set_generated_waveform(clip.id, peaks)
@@ -1814,24 +1911,40 @@ class MainWindow(QMainWindow):
         asset = self.project.active_asset
         if not asset:
             return
-        track = asset.generated_track
-        before = copy.deepcopy(track.clips)
-        after = [
-            clip
-            for clip in before
-            if clip.id not in self.selected_generated_clip_ids
-        ]
-        if len(after) == len(before):
-            return
-        self.undo_stack.push(
-            GeneratedClipsCommand(
-                track,
-                before,
-                after,
-                self._refresh_generated_track,
-                f"删除 {len(before) - len(after)} 个 AI 音频片段",
+        affected = [
+            track
+            for track in asset.generated_audio_tracks
+            if any(
+                clip.id in self.selected_generated_clip_ids
+                for clip in track.clips
             )
+        ]
+        if not affected:
+            return
+        removed = sum(
+            1
+            for track in affected
+            for clip in track.clips
+            if clip.id in self.selected_generated_clip_ids
         )
+        self.undo_stack.beginMacro(f"删除 {removed} 个音频片段")
+        for track in affected:
+            before = copy.deepcopy(track.clips)
+            after = [
+                clip
+                for clip in before
+                if clip.id not in self.selected_generated_clip_ids
+            ]
+            self.undo_stack.push(
+                GeneratedClipsCommand(
+                    track,
+                    before,
+                    after,
+                    self._refresh_generated_track,
+                    f"更新 {track.name}",
+                )
+            )
+        self.undo_stack.endMacro()
         self.selected_generated_clip_ids.clear()
         self._mark_dirty()
 
@@ -1843,17 +1956,17 @@ class MainWindow(QMainWindow):
         if self.selected_generated_clip_ids and self.project.active_asset:
             clips = [
                 clip
-                for clip in self.project.active_asset.generated_track.clips
+                for clip in self.project.active_asset.generated_clips()
                 if clip.id in self.selected_generated_clip_ids
             ]
             if clips:
                 total_ms = sum(clip.duration_ms for clip in clips)
                 self.selection_status.setText(
-                    f"已选 {len(clips)} 个 AI 片段 · 总时长 {total_ms / 1000:.3f}s"
+                    f"已选 {len(clips)} 个音频片段 · 总时长 {total_ms / 1000:.3f}s"
                 )
                 self.workspace_state.set_selection(
                     "generated",
-                    f"{len(clips)} 个 AI 语音片段 · {total_ms / 1000:.2f} 秒",
+                    f"{len(clips)} 个生成/增强片段 · {total_ms / 1000:.2f} 秒",
                 )
                 return
         region = self._current_region()
@@ -2469,6 +2582,193 @@ class MainWindow(QMainWindow):
             / self.project.id
         )
 
+    def _start_audio_enhancement(self, engine: str) -> None:
+        asset = self.project.active_asset
+        if engine not in ENGINE_LABELS or not asset:
+            return
+        if self.enhancement_worker and self.enhancement_worker.isRunning():
+            self._show_error("已有音频处理任务正在运行。")
+            return
+        regions = sorted(
+            (
+                copy.deepcopy(region)
+                for region in asset.regions
+                if region.id in self.selected_region_ids
+            ),
+            key=lambda region: (region.start_ms, region.end_ms),
+        )
+        if not regions:
+            self._show_error("请先选择一个或多个片段。")
+            return
+        try:
+            from tts_dataset_studio.services.audio_enhancement import engine_python
+
+            engine_python(self.app_settings, engine)
+        except FileNotFoundError as exc:
+            self._show_error(f"{exc}\n\n请打开“设置 → AI 引擎 → 音频处理”配置环境。")
+            return
+        items = []
+        for region in regions:
+            cue = (
+                asset.export_track.cue_for_region(region.start_ms, region.end_ms)
+                if asset.export_track
+                else None
+            )
+            text = cue.text if cue and cue.text else ENGINE_LABELS[engine]
+            items.append(EnhancementBatchItem(region=region, text=text))
+        base = (
+            Path(self.app_settings.enhancement_temp_dir)
+            if self.app_settings.enhancement_temp_dir
+            else None
+        )
+        if base:
+            base.mkdir(parents=True, exist_ok=True)
+        self._enhancement_temp_folder = Path(
+            tempfile.mkdtemp(
+                prefix="tts-studio-enhance-",
+                dir=str(base) if base else None,
+            )
+        )
+        self._enhancement_asset_id = asset.id
+        self._enhancement_engine = engine
+        self.enhancement_worker = EnhancementWorker(
+            asset,
+            items,
+            engine,
+            self.app_settings,
+            self._enhancement_temp_folder,
+            self._generated_audio_dir(),
+        )
+        self.enhancement_worker.progress.connect(self.task_notice.set_progress)
+        self.enhancement_worker.item_completed.connect(
+            self._audio_enhancement_item_completed
+        )
+        self.enhancement_worker.completed.connect(
+            self._audio_enhancement_completed
+        )
+        self.enhancement_worker.cancelled.connect(
+            self._audio_enhancement_cancelled
+        )
+        self.enhancement_worker.failed.connect(self._audio_enhancement_failed)
+        self.enhancement_worker.start()
+        self.task_notice.start(
+            f"{ENGINE_LABELS[engine]} · 正在处理 0/{len(items)}"
+        )
+        self.status_message.setText(f"AUDIO · {ENGINE_LABELS[engine]}正在运行")
+
+    def _audio_enhancement_item_completed(self, payload: object) -> None:
+        item, path = payload
+        asset = next(
+            (
+                candidate
+                for candidate in self.project.assets
+                if candidate.id == self._enhancement_asset_id
+            ),
+            None,
+        )
+        if not asset:
+            return
+        track = asset.enhancement_track
+        duration_ms = item.region.end_ms - item.region.start_ms
+        other_clips = [
+            clip
+            for clip in track.clips
+            if clip.reference_region_id != item.region.id
+        ]
+        if any(
+            item.region.start_ms < clip.end_ms
+            and clip.start_ms < item.region.end_ms
+            for clip in other_clips
+        ):
+            Path(path).unlink(missing_ok=True)
+            if self.enhancement_worker:
+                self.enhancement_worker.cancel()
+            self._show_error("增强结果与增强音轨上的其他片段重叠，已停止当前批次。")
+            return
+        new_clip = GeneratedAudioClip(
+            path=str(Path(path).resolve()),
+            start_ms=item.region.start_ms,
+            source_offset_ms=0,
+            duration_ms=duration_ms,
+            source_duration_ms=duration_ms,
+            reference_region_id=item.region.id,
+            text=f"{ENGINE_LABELS[self._enhancement_engine]} · {item.text}",
+            engine=self._enhancement_engine,
+            generation_params=self._audio_enhancement_params(),
+            id=item.clip_id,
+        )
+        before = copy.deepcopy(track.clips)
+        after = [
+            clip
+            for clip in before
+            if clip.reference_region_id != item.region.id
+        ]
+        after.append(new_clip)
+        after.sort(key=lambda clip: (clip.start_ms, clip.id))
+        self.undo_stack.push(
+            GeneratedClipsCommand(
+                track,
+                before,
+                after,
+                self._refresh_generated_track,
+                ENGINE_LABELS[self._enhancement_engine],
+            )
+        )
+        self.selected_generated_clip_ids = {new_clip.id}
+        self._mark_dirty()
+        completed = len(
+            [
+                clip
+                for clip in track.clips
+                if clip.engine == self._enhancement_engine
+            ]
+        )
+        self.task_notice.message.setText(
+            f"{ENGINE_LABELS[self._enhancement_engine]} · 已完成 {completed} 个片段"
+        )
+
+    def _audio_enhancement_params(self) -> dict[str, object]:
+        settings = self.app_settings
+        if self._enhancement_engine == "dpdfnet":
+            return {
+                "model": settings.dpdfnet_model,
+                "attn_limit_db": settings.dpdfnet_attn_limit_db,
+            }
+        if self._enhancement_engine == "separator":
+            return {
+                "model": settings.separator_model,
+                "use_autocast": settings.separator_use_autocast,
+            }
+        return {
+            "device": settings.stupase_device,
+            "experimental": True,
+            "sample_rate": 16000,
+        }
+
+    def _finish_audio_enhancement(self) -> None:
+        if self._enhancement_temp_folder:
+            shutil.rmtree(self._enhancement_temp_folder, ignore_errors=True)
+        self._enhancement_temp_folder = None
+        self._enhancement_asset_id = None
+        self._enhancement_engine = ""
+
+    def _audio_enhancement_completed(self) -> None:
+        label = ENGINE_LABELS.get(self._enhancement_engine, "音频处理")
+        self.task_notice.finish(f"{label}完成 · 结果已加入增强音轨")
+        self.status_message.setText(f"AUDIO READY · {label}")
+        self._finish_audio_enhancement()
+
+    def _audio_enhancement_cancelled(self) -> None:
+        self.task_notice.finish("音频处理已取消 · 已完成片段仍保留")
+        self.status_message.setText("AUDIO CANCELLED")
+        self._finish_audio_enhancement()
+
+    def _audio_enhancement_failed(self, message: str) -> None:
+        LOGGER.error("Audio enhancement failed: %s", message)
+        self.task_notice.clear()
+        self._finish_audio_enhancement()
+        self._show_error(message)
+
     def _tts_generation_params(self) -> dict[str, object]:
         settings = self.app_settings
         return {
@@ -2747,6 +3047,13 @@ class MainWindow(QMainWindow):
             self.output_edit.setPlainText(folder)
 
     def new_project(self) -> None:
+        if self.enhancement_worker and self.enhancement_worker.isRunning():
+            QMessageBox.information(
+                self,
+                "音频处理进行中",
+                "请先取消或等待当前音频处理任务完成。",
+            )
+            return
         if self._tts_busy:
             QMessageBox.information(
                 self,
@@ -2780,6 +3087,13 @@ class MainWindow(QMainWindow):
         self._set_project_title()
 
     def open_project(self) -> None:
+        if self.enhancement_worker and self.enhancement_worker.isRunning():
+            QMessageBox.information(
+                self,
+                "音频处理进行中",
+                "请先取消或等待当前音频处理任务完成。",
+            )
+            return
         if self._tts_busy:
             QMessageBox.information(
                 self,
@@ -2981,6 +3295,9 @@ class MainWindow(QMainWindow):
         if self.export_worker and self.export_worker.isRunning():
             self.export_worker.cancel()
             self.export_worker.wait(3000)
+        if self.enhancement_worker and self.enhancement_worker.isRunning():
+            self.enhancement_worker.cancel()
+            self.enhancement_worker.wait(5000)
         self._cleanup_asr_temp()
         self._finish_tts_batch()
         if self.app_settings.unload_asr_on_exit or self.asr.state != "unloaded":
