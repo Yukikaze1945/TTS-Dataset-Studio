@@ -5,6 +5,7 @@ from pathlib import Path
 
 from PySide6.QtWidgets import QApplication
 
+import tts_dataset_studio.services.audio_enhancement as audio_enhancement_module
 import tts_dataset_studio.ui.main_window as main_window_module
 from tts_dataset_studio.domain.app_settings import AppSettings
 from tts_dataset_studio.domain.models import (
@@ -273,7 +274,30 @@ def test_enhancement_worker_does_not_publish_partial_chain_result(
 
 def test_extract_generated_clip_audio_uses_current_non_destructive_trim(
     tmp_path: Path,
+    monkeypatch,
 ) -> None:
+    captured: list[str] = []
+
+    def fake_ffmpeg(command, **_kwargs):
+        captured.extend(command)
+        destination = Path(command[-1])
+        with wave.open(str(destination), "wb") as audio:
+            audio.setnchannels(1)
+            audio.setsampwidth(2)
+            audio.setframerate(48000)
+            audio.writeframes(b"\0\0" * 14400)
+
+        class Result:
+            returncode = 0
+            stderr = ""
+
+        return Result()
+
+    monkeypatch.setattr(
+        audio_enhancement_module.subprocess,
+        "run",
+        fake_ffmpeg,
+    )
     source = tmp_path / "enhanced.wav"
     with wave.open(str(source), "wb") as audio:
         audio.setnchannels(1)
@@ -292,12 +316,18 @@ def test_extract_generated_clip_audio_uses_current_non_destructive_trim(
     )
     destination = tmp_path / "trimmed.wav"
 
-    extract_generated_clip_audio(clip, destination, ToolPaths.discover())
+    extract_generated_clip_audio(
+        clip,
+        destination,
+        ToolPaths("ffmpeg", "ffprobe", None),
+    )
 
     with wave.open(str(destination), "rb") as audio:
         assert audio.getframerate() == 48000
         assert audio.getnchannels() == 1
         assert abs(audio.getnframes() - 14400) <= 2
+    assert captured[captured.index("-ss") + 1] == "0.200000"
+    assert captured[captured.index("-t") + 1] == "0.300000"
 
 
 def test_context_bar_keeps_source_actions_when_result_is_focused(qtbot) -> None:
