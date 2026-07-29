@@ -436,10 +436,10 @@ def test_generated_focus_does_not_replace_source_workflow_selection(qtbot) -> No
     assert window.selected_region_ids == {first_region.id}
     assert window.selected_generated_clip_ids == {clip.id}
     assert window.workspace_state.selection_kind == "region"
-    assert window.workspace_state.focus_kind == "generated"
+    assert window.workspace_state.focus_kind == "enhancement"
     assert window.context_bar.process_button.isEnabled()
     assert not window.context_bar.locate_button.isHidden()
-    assert "仍作用于源片段" in window.context_bar.detail.text()
+    assert "继续处理当前结果" in window.context_bar.detail.text()
 
     window._cue_selected(track.id, second.id)
 
@@ -448,6 +448,45 @@ def test_generated_focus_does_not_replace_source_workflow_selection(qtbot) -> No
     assert window.selected_region_id != first_region.id
     assert window.context_bar.process_button.isEnabled()
     assert window.context_bar.locate_button.isHidden()
+    window.dirty = False
+
+
+def test_continue_processing_uses_focused_enhancement_trim_as_input(qtbot) -> None:
+    window = MainWindow()
+    qtbot.addWidget(window)
+    clip = GeneratedAudioClip(
+        path="enhanced.wav",
+        start_ms=1200,
+        source_offset_ms=250,
+        duration_ms=800,
+        source_duration_ms=1500,
+        reference_region_id="source-region",
+        text="去除 BGM · 当前台词",
+        engine="separator",
+        generation_params={
+            "pipeline": ["separator"],
+            "steps": [{"engine": "separator", "model": "test"}],
+            "source_text": "当前台词",
+        },
+    )
+    asset = MediaAsset("source.wav", "source.wav", duration_ms=4000)
+    asset.enhancement_track.clips.append(clip)
+    window.project = Project(assets=[asset], active_asset_id=asset.id)
+    window.selected_generated_clip_ids = {clip.id}
+
+    items = window._build_audio_enhancement_items(
+        asset,
+        ("dpdfnet",),
+        "focused",
+    )
+
+    assert len(items) == 1
+    assert items[0].input_clip == clip
+    assert items[0].input_clip.source_offset_ms == 250
+    assert (items[0].region.start_ms, items[0].region.end_ms) == (1200, 2000)
+    assert items[0].reference_region_id == "source-region"
+    assert items[0].previous_pipeline == ("separator",)
+    assert items[0].text == "当前台词"
     window.dirty = False
 
 
@@ -510,10 +549,15 @@ def test_enhancement_completion_keeps_source_actions_available(
     window.timeline.set_asset(asset)
     window._apply_region_selection(region.id, False, True)
     window._enhancement_asset_id = asset.id
-    window._enhancement_engine = "dpdfnet"
+    window._enhancement_process_id = "dpdfnet"
+    window._enhancement_steps = ("dpdfnet",)
     output = tmp_path / "enhanced.wav"
     output.write_bytes(b"enhanced")
-    item = EnhancementBatchItem(region=region, text="处理文本")
+    item = EnhancementBatchItem(
+        region=region,
+        text="处理文本",
+        reference_region_id=region.id,
+    )
     monkeypatch.setattr(window, "_schedule_generated_waveform", lambda _clip: None)
     monkeypatch.setattr(window, "_schedule_ai_monitor", lambda: None)
 
@@ -523,7 +567,82 @@ def test_enhancement_completion_keeps_source_actions_available(
     assert window.selected_generated_clip_ids == {item.clip_id}
     assert window.context_bar.process_button.isEnabled()
     assert window.context_bar.export_button.isEnabled()
-    assert "仍作用于源片段" in window.context_bar.detail.text()
+    assert "继续处理当前结果" in window.context_bar.detail.text()
+    assert asset.enhancement_track.solo
+    assert not asset.enhancement_track.muted
+    assert not asset.source_solo
+    window.dirty = False
+
+
+def test_continued_enhancement_replaces_only_after_success_and_undo_restores(
+    qtbot,
+    tmp_path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    window = MainWindow()
+    qtbot.addWidget(window)
+    region = ExportRegion(500, 1500)
+    old_path = tmp_path / "old.wav"
+    old_path.write_bytes(b"old")
+    old_clip = GeneratedAudioClip(
+        path=str(old_path),
+        start_ms=500,
+        source_offset_ms=100,
+        duration_ms=1000,
+        source_duration_ms=1200,
+        reference_region_id=region.id,
+        text="去除 BGM · 台词",
+        engine="separator",
+        generation_params={
+            "pipeline": ["separator"],
+            "steps": [{"engine": "separator"}],
+            "source_text": "台词",
+        },
+    )
+    asset = MediaAsset(
+        "missing.wav",
+        "missing.wav",
+        duration_ms=3000,
+        regions=[region],
+    )
+    asset.enhancement_track.clips.append(old_clip)
+    window.project = Project(assets=[asset], active_asset_id=asset.id)
+    window.timeline.set_asset(asset)
+    window._enhancement_asset_id = asset.id
+    window._enhancement_process_id = "dpdfnet"
+    window._enhancement_steps = ("dpdfnet",)
+    window._enhancement_input_mode = "focused"
+    new_path = tmp_path / "new.wav"
+    new_path.write_bytes(b"new")
+    item = EnhancementBatchItem(
+        region=ExportRegion(old_clip.start_ms, old_clip.end_ms),
+        text="台词",
+        reference_region_id=region.id,
+        input_clip=old_clip,
+        input_label="当前增强结果（去除 BGM）",
+        previous_pipeline=("separator",),
+        previous_step_params=({"engine": "separator"},),
+    )
+    monkeypatch.setattr(window, "_schedule_generated_waveform", lambda _clip: None)
+    monkeypatch.setattr(window, "_schedule_ai_monitor", lambda: None)
+
+    window._audio_enhancement_item_completed((item, new_path))
+
+    assert len(asset.enhancement_track.clips) == 1
+    replacement = asset.enhancement_track.clips[0]
+    assert replacement.engine == "separator+dpdfnet"
+    assert replacement.generation_params["pipeline"] == [
+        "separator",
+        "dpdfnet",
+    ]
+    assert replacement.generation_params["input_source"].startswith(
+        "当前增强结果"
+    )
+    assert replacement.text == "去除 BGM → 快速降噪 · 台词"
+
+    window.undo_stack.undo()
+
+    assert asset.enhancement_track.clips == [old_clip]
     window.dirty = False
 
 

@@ -79,7 +79,11 @@ from tts_dataset_studio.services.asr_audio import extract_asr_audio
 from tts_dataset_studio.services.asr_controller import AsrController
 from tts_dataset_studio.services.audio_enhancement import (
     ENGINE_LABELS,
+    engine_python,
+    engine_steps,
+    extract_generated_clip_audio,
     extract_region_audio,
+    pipeline_label,
     run_engine,
 )
 from tts_dataset_studio.services.exporter import ExportResult, export_region
@@ -297,11 +301,17 @@ class TtsReferenceTask(QRunnable):
 class EnhancementBatchItem:
     region: ExportRegion
     text: str
+    reference_region_id: str = ""
+    input_clip: GeneratedAudioClip | None = None
+    input_label: str = "原声"
+    previous_pipeline: tuple[str, ...] = ()
+    previous_step_params: tuple[dict[str, object], ...] = ()
     clip_id: str = field(default_factory=new_id)
 
 
 class EnhancementWorker(QThread):
     progress = Signal(int)
+    stage_changed = Signal(object)
     item_completed = Signal(object)
     completed = Signal()
     failed = Signal(str)
@@ -311,7 +321,7 @@ class EnhancementWorker(QThread):
         self,
         asset: MediaAsset,
         items: list[EnhancementBatchItem],
-        engine: str,
+        process_id: str,
         settings: AppSettings,
         work_folder: Path,
         destination_folder: Path,
@@ -319,7 +329,8 @@ class EnhancementWorker(QThread):
         super().__init__()
         self.asset = copy.deepcopy(asset)
         self.items = copy.deepcopy(items)
-        self.engine = engine
+        self.process_id = process_id
+        self.steps = engine_steps(process_id)
         self.settings = copy.deepcopy(settings)
         self.work_folder = work_folder
         self.destination_folder = destination_folder
@@ -327,32 +338,63 @@ class EnhancementWorker(QThread):
 
     def run(self) -> None:
         try:
-            total = len(self.items)
+            total_items = len(self.items)
+            total_steps = max(1, total_items * len(self.steps))
+            finished_steps = 0
             self.work_folder.mkdir(parents=True, exist_ok=True)
             self.destination_folder.mkdir(parents=True, exist_ok=True)
             for index, item in enumerate(self.items, start=1):
                 if self.cancel_event.is_set():
                     raise InterruptedError
                 item_folder = self.work_folder / f"{index:04d}"
-                source = extract_region_audio(
-                    self.asset,
-                    item.region,
-                    item_folder / "source.wav",
-                )
-                output = item_folder / "enhanced.wav"
-                run_engine(
-                    self.settings,
-                    self.engine,
-                    source,
-                    output,
-                    self.cancel_event,
-                )
+                if item.input_clip:
+                    source = extract_generated_clip_audio(
+                        item.input_clip,
+                        item_folder / "source.wav",
+                    )
+                else:
+                    source = extract_region_audio(
+                        self.asset,
+                        item.region,
+                        item_folder / "source.wav",
+                    )
+                for step_index, engine in enumerate(self.steps, start=1):
+                    if self.cancel_event.is_set():
+                        raise InterruptedError
+                    self.stage_changed.emit(
+                        {
+                            "item_index": index,
+                            "item_total": total_items,
+                            "step_index": step_index,
+                            "step_total": len(self.steps),
+                            "engine": engine,
+                            "input_label": item.input_label,
+                        }
+                    )
+                    output = item_folder / f"step_{step_index:02d}_{engine}.wav"
+                    try:
+                        run_engine(
+                            self.settings,
+                            engine,
+                            source,
+                            output,
+                            self.cancel_event,
+                        )
+                    except InterruptedError:
+                        raise
+                    except Exception as exc:
+                        raise RuntimeError(
+                            f"{ENGINE_LABELS[engine]}"
+                            f"（步骤 {step_index}/{len(self.steps)}）失败：\n{exc}"
+                        ) from exc
+                    source = output
+                    finished_steps += 1
+                    self.progress.emit(round(finished_steps / total_steps * 100))
                 destination = self.destination_folder / f"{item.clip_id}.wav"
                 temporary = destination.with_name(destination.name + ".tmp")
-                shutil.copy2(output, temporary)
+                shutil.copy2(source, temporary)
                 temporary.replace(destination)
                 self.item_completed.emit((item, destination))
-                self.progress.emit(round(index / max(1, total) * 100))
             self.completed.emit()
         except InterruptedError:
             self.cancelled.emit()
@@ -443,7 +485,10 @@ class MainWindow(QMainWindow):
         self._tts_current: TtsBatchItem | None = None
         self.enhancement_worker: EnhancementWorker | None = None
         self._enhancement_asset_id: str | None = None
-        self._enhancement_engine = ""
+        self._enhancement_process_id = ""
+        self._enhancement_steps: tuple[str, ...] = ()
+        self._enhancement_input_mode = "source"
+        self._enhancement_completed_count = 0
         self._enhancement_temp_folder: Path | None = None
         self._ai_monitor_token = 0
         self.undo_stack = QUndoStack(self)
@@ -2091,11 +2136,20 @@ class MainWindow(QMainWindow):
         focus_summary = ""
         if focused_clips:
             focus_duration_ms = sum(clip.duration_ms for clip in focused_clips)
+            enhancement_ids = {
+                clip.id for clip in asset.enhancement_track.clips
+            }
+            enhancement_only = self.selected_generated_clip_ids <= enhancement_ids
             focus_summary = (
-                f"{len(focused_clips)} 个生成/增强结果"
-                f" · {focus_duration_ms / 1000:.2f} 秒"
+                f"{len(focused_clips)} 个增强结果"
+                if enhancement_only
+                else f"{len(focused_clips)} 个生成结果"
             )
-            self.workspace_state.set_focus("generated", focus_summary)
+            focus_summary += f" · {focus_duration_ms / 1000:.2f} 秒"
+            self.workspace_state.set_focus(
+                "enhancement" if enhancement_only else "generated",
+                focus_summary,
+            )
         else:
             self.workspace_state.set_focus("none")
 
@@ -2154,10 +2208,19 @@ class MainWindow(QMainWindow):
             self.selected_region_ids
             and self.project.active_asset
         )
+        has_enhancement_focus = bool(
+            self.project.active_asset
+            and any(
+                clip.id in self.selected_generated_clip_ids
+                for clip in self.project.active_asset.enhancement_track.clips
+            )
+        )
         self.context_bar.process_button.setText(
             "处理中…" if running else "处理音频"
         )
-        self.context_bar.process_button.setEnabled(has_source and not running)
+        self.context_bar.process_button.setEnabled(
+            (has_source or has_enhancement_focus) and not running
+        )
         if running:
             self.context_bar.process_button.setToolTip(
                 "当前音频处理完成或取消后可再次处理"
@@ -2183,6 +2246,8 @@ class MainWindow(QMainWindow):
             "向下拖动波形轨底边，展开后显示 dBFS 标尺与参考线；\n"
             "监看区可在“视频 / 波形”之间切换；\n"
             "增益会实时改变时间线波形，红色部分表示预计削波；\n"
+            "“处理音频”可一键去 BGM → 降噪；点击增强结果后可继续处理；\n"
+            "处理成功会自动独奏增强音轨，按 E 直接导出处理后的声音；\n"
             "试听和导出都遵循轨道 Mute / Solo：Solo 优先，多条可听轨道会混音。",
         )
 
@@ -2751,13 +2816,78 @@ class MainWindow(QMainWindow):
             / self.project.id
         )
 
-    def _start_audio_enhancement(self, engine: str) -> None:
-        asset = self.project.active_asset
-        if engine not in ENGINE_LABELS or not asset:
-            return
-        if self.enhancement_worker and self.enhancement_worker.isRunning():
-            self._show_error("已有音频处理任务正在运行。")
-            return
+    def _enhancement_clip_history(
+        self,
+        clip: GeneratedAudioClip,
+    ) -> tuple[tuple[str, ...], tuple[dict[str, object], ...]]:
+        raw_pipeline = clip.generation_params.get("pipeline")
+        if isinstance(raw_pipeline, list):
+            previous_pipeline = tuple(
+                engine
+                for engine in raw_pipeline
+                if isinstance(engine, str) and engine in ENGINE_LABELS
+            )
+        else:
+            previous_pipeline = tuple(
+                engine
+                for engine in clip.engine.split("+")
+                if engine in ENGINE_LABELS
+            )
+        raw_steps = clip.generation_params.get("steps")
+        previous_step_params = (
+            tuple(copy.deepcopy(item) for item in raw_steps if isinstance(item, dict))
+            if isinstance(raw_steps, list)
+            else ()
+        )
+        return previous_pipeline, previous_step_params
+
+    def _build_audio_enhancement_items(
+        self,
+        asset: MediaAsset,
+        steps: tuple[str, ...],
+        input_mode: str,
+    ) -> list[EnhancementBatchItem]:
+        items: list[EnhancementBatchItem] = []
+        if input_mode == "focused":
+            focused_clips = sorted(
+                (
+                    copy.deepcopy(clip)
+                    for clip in asset.enhancement_track.clips
+                    if clip.id in self.selected_generated_clip_ids
+                ),
+                key=lambda clip: (clip.start_ms, clip.end_ms, clip.id),
+            )
+            if not focused_clips:
+                raise ValueError(
+                    "请先点击增强音轨上的处理结果，再选择“继续处理当前结果”。"
+                )
+            for clip in focused_clips:
+                previous_pipeline, previous_step_params = (
+                    self._enhancement_clip_history(clip)
+                )
+                region = ExportRegion(clip.start_ms, clip.end_ms)
+                source_text = str(
+                    clip.generation_params.get("source_text") or ""
+                ).strip()
+                if not source_text:
+                    source_text = clip.text.split(" · ", 1)[-1].strip()
+                items.append(
+                    EnhancementBatchItem(
+                        region=region,
+                        text=source_text or pipeline_label(steps),
+                        reference_region_id=clip.reference_region_id or region.id,
+                        input_clip=clip,
+                        input_label=(
+                            f"当前增强结果（{pipeline_label(previous_pipeline)}）"
+                            if previous_pipeline
+                            else "当前增强结果"
+                        ),
+                        previous_pipeline=previous_pipeline,
+                        previous_step_params=previous_step_params,
+                    )
+                )
+            return items
+
         regions = sorted(
             (
                 copy.deepcopy(region)
@@ -2767,24 +2897,60 @@ class MainWindow(QMainWindow):
             key=lambda region: (region.start_ms, region.end_ms),
         )
         if not regions:
-            self._show_error("请先选择一个或多个片段。")
-            return
-        try:
-            from tts_dataset_studio.services.audio_enhancement import engine_python
-
-            engine_python(self.app_settings, engine)
-        except FileNotFoundError as exc:
-            self._show_error(f"{exc}\n\n请打开“设置 → AI 引擎 → 音频处理”配置环境。")
-            return
-        items = []
+            raise ValueError("请先选择一个或多个源片段。")
         for region in regions:
             cue = (
-                asset.export_track.cue_for_region(region.start_ms, region.end_ms)
+                asset.export_track.cue_for_region(
+                    region.start_ms,
+                    region.end_ms,
+                )
                 if asset.export_track
                 else None
             )
-            text = cue.text if cue and cue.text else ENGINE_LABELS[engine]
-            items.append(EnhancementBatchItem(region=region, text=text))
+            text = cue.text if cue and cue.text else pipeline_label(steps)
+            items.append(
+                EnhancementBatchItem(
+                    region=region,
+                    text=text,
+                    reference_region_id=region.id,
+                )
+            )
+        return items
+
+    def _start_audio_enhancement(
+        self,
+        process_id: str,
+        input_mode: str = "source",
+    ) -> None:
+        asset = self.project.active_asset
+        if not asset:
+            return
+        try:
+            steps = engine_steps(process_id)
+        except ValueError as exc:
+            self._show_error(str(exc))
+            return
+        if input_mode not in {"source", "focused"}:
+            self._show_error(f"不支持的音频处理输入：{input_mode}")
+            return
+        if self.enhancement_worker and self.enhancement_worker.isRunning():
+            self._show_error("已有音频处理任务正在运行。")
+            return
+        try:
+            for engine in steps:
+                engine_python(self.app_settings, engine)
+        except FileNotFoundError as exc:
+            self._show_error(f"{exc}\n\n请打开“设置 → AI 引擎 → 音频处理”配置环境。")
+            return
+        try:
+            items = self._build_audio_enhancement_items(
+                asset,
+                steps,
+                input_mode,
+            )
+        except ValueError as exc:
+            self._show_error(str(exc))
+            return
         base = (
             Path(self.app_settings.enhancement_temp_dir)
             if self.app_settings.enhancement_temp_dir
@@ -2799,16 +2965,22 @@ class MainWindow(QMainWindow):
             )
         )
         self._enhancement_asset_id = asset.id
-        self._enhancement_engine = engine
+        self._enhancement_process_id = process_id
+        self._enhancement_steps = steps
+        self._enhancement_input_mode = input_mode
+        self._enhancement_completed_count = 0
         self.enhancement_worker = EnhancementWorker(
             asset,
             items,
-            engine,
+            process_id,
             self.app_settings,
             self._enhancement_temp_folder,
             self._generated_audio_dir(),
         )
         self.enhancement_worker.progress.connect(self.task_notice.set_progress)
+        self.enhancement_worker.stage_changed.connect(
+            self._audio_enhancement_stage_changed
+        )
         self.enhancement_worker.item_completed.connect(
             self._audio_enhancement_item_completed
         )
@@ -2820,11 +2992,25 @@ class MainWindow(QMainWindow):
         )
         self.enhancement_worker.failed.connect(self._audio_enhancement_failed)
         self.enhancement_worker.start()
+        input_label = "当前增强结果" if input_mode == "focused" else "原声"
         self.task_notice.start(
-            f"{ENGINE_LABELS[engine]} · 正在处理 0/{len(items)}"
+            f"{pipeline_label(steps)} · 输入：{input_label} · 0/{len(items)}"
         )
-        self.status_message.setText(f"AUDIO · {ENGINE_LABELS[engine]}正在运行")
+        self.status_message.setText(
+            f"AUDIO · {input_label} → {pipeline_label(steps)}"
+        )
         self._update_audio_processing_button()
+
+    def _audio_enhancement_stage_changed(self, payload: object) -> None:
+        if not isinstance(payload, dict):
+            return
+        engine = str(payload.get("engine") or "")
+        self.task_notice.message.setText(
+            f"片段 {payload.get('item_index')}/{payload.get('item_total')}"
+            f" · 步骤 {payload.get('step_index')}/{payload.get('step_total')}"
+            f"：{ENGINE_LABELS.get(engine, engine)}"
+            f" · 输入：{payload.get('input_label') or '原声'}"
+        )
 
     def _audio_enhancement_item_completed(self, payload: object) -> None:
         item, path = payload
@@ -2840,10 +3026,11 @@ class MainWindow(QMainWindow):
             return
         track = asset.enhancement_track
         duration_ms = item.region.end_ms - item.region.start_ms
+        reference_region_id = item.reference_region_id or item.region.id
         other_clips = [
             clip
             for clip in track.clips
-            if clip.reference_region_id != item.region.id
+            if clip.reference_region_id != reference_region_id
         ]
         if any(
             item.region.start_ms < clip.end_ms
@@ -2855,23 +3042,34 @@ class MainWindow(QMainWindow):
                 self.enhancement_worker.cancel()
             self._show_error("增强结果与增强音轨上的其他片段重叠，已停止当前批次。")
             return
+        full_pipeline = item.previous_pipeline + self._enhancement_steps
+        full_step_params = item.previous_step_params + tuple(
+            self._audio_enhancement_params(engine)
+            for engine in self._enhancement_steps
+        )
+        full_label = pipeline_label(full_pipeline)
         new_clip = GeneratedAudioClip(
             path=str(Path(path).resolve()),
             start_ms=item.region.start_ms,
             source_offset_ms=0,
             duration_ms=duration_ms,
             source_duration_ms=duration_ms,
-            reference_region_id=item.region.id,
-            text=f"{ENGINE_LABELS[self._enhancement_engine]} · {item.text}",
-            engine=self._enhancement_engine,
-            generation_params=self._audio_enhancement_params(),
+            reference_region_id=reference_region_id,
+            text=f"{full_label} · {item.text}",
+            engine="+".join(full_pipeline),
+            generation_params={
+                "pipeline": list(full_pipeline),
+                "steps": list(full_step_params),
+                "input_source": item.input_label,
+                "source_text": item.text,
+            },
             id=item.clip_id,
         )
         before = copy.deepcopy(track.clips)
         after = [
             clip
             for clip in before
-            if clip.reference_region_id != item.region.id
+            if clip.reference_region_id != reference_region_id
         ]
         after.append(new_clip)
         after.sort(key=lambda clip: (clip.start_ms, clip.id))
@@ -2881,35 +3079,38 @@ class MainWindow(QMainWindow):
                 before,
                 after,
                 self._refresh_generated_track,
-                ENGINE_LABELS[self._enhancement_engine],
+                pipeline_label(self._enhancement_steps),
             )
         )
+        asset.source_solo = False
+        for candidate_track in asset.generated_audio_tracks:
+            candidate_track.solo = candidate_track is track
+        track.muted = False
+        self.timeline.update()
+        self._schedule_ai_monitor()
         self._set_generated_focus({new_clip.id})
         self._mark_dirty()
-        completed = len(
-            [
-                clip
-                for clip in track.clips
-                if clip.engine == self._enhancement_engine
-            ]
-        )
+        self._enhancement_completed_count += 1
         self.task_notice.message.setText(
-            f"{ENGINE_LABELS[self._enhancement_engine]} · 已完成 {completed} 个片段"
+            f"{full_label} · 已完成 {self._enhancement_completed_count} 个片段"
         )
 
-    def _audio_enhancement_params(self) -> dict[str, object]:
+    def _audio_enhancement_params(self, engine: str) -> dict[str, object]:
         settings = self.app_settings
-        if self._enhancement_engine == "dpdfnet":
+        if engine == "dpdfnet":
             return {
+                "engine": engine,
                 "model": settings.dpdfnet_model,
                 "attn_limit_db": settings.dpdfnet_attn_limit_db,
             }
-        if self._enhancement_engine == "separator":
+        if engine == "separator":
             return {
+                "engine": engine,
                 "model": settings.separator_model,
                 "use_autocast": settings.separator_use_autocast,
             }
         return {
+            "engine": engine,
             "device": settings.stupase_device,
             "experimental": True,
             "sample_rate": 16000,
@@ -2920,21 +3121,33 @@ class MainWindow(QMainWindow):
             shutil.rmtree(self._enhancement_temp_folder, ignore_errors=True)
         self._enhancement_temp_folder = None
         self._enhancement_asset_id = None
-        self._enhancement_engine = ""
+        self._enhancement_process_id = ""
+        self._enhancement_steps = ()
+        self._enhancement_input_mode = "source"
+        self._enhancement_completed_count = 0
         self._update_audio_processing_button()
 
     def _audio_enhancement_completed(self) -> None:
-        label = ENGINE_LABELS.get(self._enhancement_engine, "音频处理")
+        label = (
+            pipeline_label(self._enhancement_steps)
+            if self._enhancement_steps
+            else "音频处理"
+        )
+        continued = self._enhancement_input_mode == "focused"
         self.task_notice.finish(
-            f"{label}完成 · 已加入增强音轨，源片段仍保持选中"
+            f"{label}完成 · 已更新增强结果，旧版可撤销恢复"
+            if continued
+            else f"{label}完成 · 已加入增强音轨"
         )
         self.status_message.setText(
-            f"AUDIO READY · {label} · 可直接选择下一段继续处理"
+            f"AUDIO READY · {label} · 已自动独奏增强音轨，E 将导出处理结果"
         )
         self._finish_audio_enhancement()
 
     def _audio_enhancement_cancelled(self) -> None:
-        self.task_notice.finish("音频处理已取消 · 已完成片段仍保留")
+        self.task_notice.finish(
+            "音频处理已取消 · 旧结果未被覆盖，已完成片段仍保留"
+        )
         self.status_message.setText("AUDIO CANCELLED")
         self._finish_audio_enhancement()
 

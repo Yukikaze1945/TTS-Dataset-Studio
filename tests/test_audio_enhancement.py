@@ -1,18 +1,31 @@
 from __future__ import annotations
 
+import wave
 from pathlib import Path
 
 from PySide6.QtWidgets import QApplication
 
+import tts_dataset_studio.ui.main_window as main_window_module
 from tts_dataset_studio.domain.app_settings import AppSettings
 from tts_dataset_studio.domain.models import (
+    ExportRegion,
     GeneratedAudioClip,
     MediaAsset,
     Project,
 )
 from tts_dataset_studio.services.ai_monitor import audible_generated_tracks
-from tts_dataset_studio.services.audio_enhancement import build_engine_command
+from tts_dataset_studio.services.audio_enhancement import (
+    build_engine_command,
+    engine_steps,
+    extract_generated_clip_audio,
+    pipeline_label,
+)
+from tts_dataset_studio.services.media import ToolPaths
 from tts_dataset_studio.services.project_io import load_project, save_project
+from tts_dataset_studio.ui.main_window import (
+    EnhancementBatchItem,
+    EnhancementWorker,
+)
 from tts_dataset_studio.ui.timeline import TimelineCanvas
 from tts_dataset_studio.ui.workspace import ContextActionBar
 
@@ -166,6 +179,127 @@ def test_build_stupase_command_requires_official_checkout(tmp_path: Path) -> Non
     assert cwd == root
 
 
+def test_recommended_process_is_a_real_two_step_pipeline() -> None:
+    assert engine_steps("separator+dpdfnet") == ("separator", "dpdfnet")
+    assert pipeline_label(engine_steps("separator+dpdfnet")) == (
+        "去除 BGM → 快速降噪"
+    )
+
+
+def test_enhancement_worker_feeds_each_step_into_the_next(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    calls: list[tuple[str, bytes]] = []
+
+    def fake_extract(_asset, _region, destination, _tools=None):
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        destination.write_bytes(b"source")
+        return destination
+
+    def fake_run(_settings, engine, source, destination, _cancel=None):
+        payload = Path(source).read_bytes()
+        calls.append((engine, payload))
+        destination.write_bytes(payload + b"|" + engine.encode())
+        return destination
+
+    monkeypatch.setattr(main_window_module, "extract_region_audio", fake_extract)
+    monkeypatch.setattr(main_window_module, "run_engine", fake_run)
+    item = EnhancementBatchItem(
+        region=ExportRegion(100, 600),
+        text="test",
+    )
+    completed: list[tuple[EnhancementBatchItem, Path]] = []
+    stages: list[dict] = []
+    worker = EnhancementWorker(
+        MediaAsset("source.wav", "source.wav", duration_ms=1000),
+        [item],
+        "separator+dpdfnet",
+        AppSettings(),
+        tmp_path / "work",
+        tmp_path / "output",
+    )
+    worker.item_completed.connect(completed.append)
+    worker.stage_changed.connect(stages.append)
+
+    worker.run()
+
+    assert calls == [
+        ("separator", b"source"),
+        ("dpdfnet", b"source|separator"),
+    ]
+    assert completed[0][1].read_bytes() == b"source|separator|dpdfnet"
+    assert [stage["engine"] for stage in stages] == ["separator", "dpdfnet"]
+
+
+def test_enhancement_worker_does_not_publish_partial_chain_result(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    def fake_extract(_asset, _region, destination, _tools=None):
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        destination.write_bytes(b"source")
+        return destination
+
+    def fake_run(_settings, engine, source, destination, _cancel=None):
+        if engine == "dpdfnet":
+            raise RuntimeError("second step failed")
+        destination.write_bytes(Path(source).read_bytes() + b"|separator")
+        return destination
+
+    monkeypatch.setattr(main_window_module, "extract_region_audio", fake_extract)
+    monkeypatch.setattr(main_window_module, "run_engine", fake_run)
+    completed: list[object] = []
+    failures: list[str] = []
+    worker = EnhancementWorker(
+        MediaAsset("source.wav", "source.wav", duration_ms=1000),
+        [EnhancementBatchItem(ExportRegion(100, 600), "test")],
+        "separator+dpdfnet",
+        AppSettings(),
+        tmp_path / "work",
+        tmp_path / "output",
+    )
+    worker.item_completed.connect(completed.append)
+    worker.failed.connect(failures.append)
+
+    worker.run()
+
+    assert completed == []
+    assert len(failures) == 1
+    assert "快速降噪（步骤 2/2）失败" in failures[0]
+    assert "second step failed" in failures[0]
+    assert list((tmp_path / "output").glob("*.wav")) == []
+
+
+def test_extract_generated_clip_audio_uses_current_non_destructive_trim(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "enhanced.wav"
+    with wave.open(str(source), "wb") as audio:
+        audio.setnchannels(1)
+        audio.setsampwidth(2)
+        audio.setframerate(48000)
+        audio.writeframes(b"\0\0" * 48000)
+    clip = GeneratedAudioClip(
+        path=str(source),
+        start_ms=1000,
+        source_offset_ms=200,
+        duration_ms=300,
+        source_duration_ms=1000,
+        reference_region_id="region",
+        text="enhanced",
+        engine="separator",
+    )
+    destination = tmp_path / "trimmed.wav"
+
+    extract_generated_clip_audio(clip, destination, ToolPaths.discover())
+
+    with wave.open(str(destination), "rb") as audio:
+        assert audio.getframerate() == 48000
+        assert audio.getnchannels() == 1
+        assert abs(audio.getnframes() - 14400) <= 2
+
+
 def test_context_bar_keeps_source_actions_when_result_is_focused(qtbot) -> None:
     QApplication.instance()
     bar = ContextActionBar()
@@ -183,6 +317,45 @@ def test_context_bar_keeps_source_actions_when_result_is_focused(qtbot) -> None:
     assert bar.export_button.isVisibleTo(bar)
     assert bar.locate_button.isVisibleTo(bar)
     assert "仍作用于源片段" in bar.detail.text()
+
+
+def test_context_bar_exposes_chain_and_continue_actions_for_enhancement(
+    qtbot,
+) -> None:
+    QApplication.instance()
+    bar = ContextActionBar()
+    qtbot.addWidget(bar)
+    bar.show()
+    requested: list[tuple[str, str]] = []
+    bar.process_requested.connect(
+        lambda process_id, input_mode: requested.append(
+            (process_id, input_mode)
+        )
+    )
+
+    source_action = next(
+        action
+        for action in bar.process_button.menu().actions()
+        if "一键去 BGM" in action.text()
+    )
+    continue_action = next(
+        action
+        for action in bar.process_button.menu().actions()
+        if "继续快速降噪" in action.text()
+    )
+    assert not continue_action.isVisible()
+
+    bar.set_selection("region", "one region")
+    source_action.trigger()
+    bar.set_focus("enhancement", "one enhancement result")
+    assert continue_action.isVisible()
+    continue_action.trigger()
+
+    assert requested == [
+        ("separator+dpdfnet", "source"),
+        ("dpdfnet", "focused"),
+    ]
+    assert "继续处理当前结果" in bar.detail.text()
 
 
 def test_context_bar_explains_unavailable_source_actions(qtbot) -> None:

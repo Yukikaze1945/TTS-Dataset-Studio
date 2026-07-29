@@ -8,7 +8,7 @@ from pathlib import Path
 from threading import Event
 
 from tts_dataset_studio.domain.app_settings import AppSettings
-from tts_dataset_studio.domain.models import ExportRegion, MediaAsset
+from tts_dataset_studio.domain.models import ExportRegion, GeneratedAudioClip, MediaAsset
 from tts_dataset_studio.services.media import ToolPaths
 
 ENGINE_LABELS = {
@@ -16,6 +16,24 @@ ENGINE_LABELS = {
     "separator": "去除 BGM",
     "stupase": "录音室修复",
 }
+
+PROCESS_CHAINS: dict[str, tuple[str, ...]] = {
+    "separator+dpdfnet": ("separator", "dpdfnet"),
+    "dpdfnet": ("dpdfnet",),
+    "separator": ("separator",),
+    "stupase": ("stupase",),
+}
+
+
+def engine_steps(process_id: str) -> tuple[str, ...]:
+    try:
+        return PROCESS_CHAINS[process_id]
+    except KeyError as exc:
+        raise ValueError(f"不支持的音频处理流程：{process_id}") from exc
+
+
+def pipeline_label(steps: tuple[str, ...] | list[str]) -> str:
+    return " → ".join(ENGINE_LABELS[engine] for engine in steps)
 
 
 def worker_script_path() -> Path:
@@ -80,6 +98,54 @@ def extract_region_audio(
     if process.returncode:
         destination.unlink(missing_ok=True)
         raise RuntimeError(process.stderr.strip() or "音频处理临时片段提取失败")
+    return destination
+
+
+def extract_generated_clip_audio(
+    clip: GeneratedAudioClip,
+    destination: Path,
+    tools: ToolPaths | None = None,
+) -> Path:
+    source = Path(clip.path)
+    if not source.is_file():
+        raise FileNotFoundError(f"增强结果音频不存在：\n{source}")
+    tools = tools or ToolPaths.discover()
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    process = subprocess.run(
+        [
+            tools.ffmpeg,
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-i",
+            str(source),
+            "-ss",
+            f"{clip.source_offset_ms / 1000:.6f}",
+            "-t",
+            f"{clip.duration_ms / 1000:.6f}",
+            "-vn",
+            "-ac",
+            "1",
+            "-ar",
+            "48000",
+            "-c:a",
+            "pcm_s16le",
+            "-y",
+            str(destination),
+        ],
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        check=False,
+    )
+    if process.returncode:
+        destination.unlink(missing_ok=True)
+        raise RuntimeError(process.stderr.strip() or "增强结果临时片段提取失败")
+    if not destination.is_file() or destination.stat().st_size <= 44:
+        destination.unlink(missing_ok=True)
+        raise RuntimeError("增强结果临时片段为空")
     return destination
 
 

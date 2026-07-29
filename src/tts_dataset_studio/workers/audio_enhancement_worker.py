@@ -27,6 +27,7 @@ def _dpdfnet(args: argparse.Namespace) -> None:
 
 
 def _separator(args: argparse.Namespace) -> None:
+    import librosa
     import numpy as np
     import soundfile as sf
     from audio_separator.separator import Separator
@@ -80,12 +81,25 @@ def _separator(args: argparse.Namespace) -> None:
         )
     if produced is None:
         raise RuntimeError("BS-RoFormer did not produce a vocals stem")
+    separated, output_rate = sf.read(produced, always_2d=True)
+    if output_rate != 48000:
+        separated = librosa.resample(
+            separated.T.astype(np.float32, copy=False),
+            orig_sr=output_rate,
+            target_sr=48000,
+            axis=-1,
+        ).T
+        output_rate = 48000
+    target_frames = round(original_duration * output_rate)
+    separated = separated[:target_frames]
+    if len(separated) < target_frames:
+        separated = np.pad(
+            separated,
+            ((0, target_frames - len(separated)), (0, 0)),
+        )
+    sf.write(output, separated, output_rate, subtype="PCM_16")
     if produced.resolve() != output:
-        shutil.move(str(produced), output)
-    if original_duration < 12:
-        separated, output_rate = sf.read(output, always_2d=True)
-        separated = separated[: round(original_duration * output_rate)]
-        sf.write(output, separated, output_rate, subtype="PCM_16")
+        produced.unlink(missing_ok=True)
 
 
 def _stupase(args: argparse.Namespace) -> None:

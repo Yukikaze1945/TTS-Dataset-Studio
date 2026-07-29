@@ -128,6 +128,8 @@ index-tts/
 
 选择一个或多个区间后，点击上下文栏的“处理音频”：
 
+- **一键去 BGM → 降噪（推荐）**：先运行 BS-RoFormer，再把其真实输出送入
+  DPDFNet；中间结果不会占用时间线。
 - **快速降噪**：[DPDFNet](https://github.com/ceva-ip/DPDFNet)
   `dpdfnet8_48khz_hr`，48 kHz CPU/ONNX 推理。
 - **去除 BGM**：BS-RoFormer，通过
@@ -136,9 +138,11 @@ index-tts/
 - **录音室修复（实验）**：[StuPASE](https://github.com/cisco-open/pase)，
   同时处理噪声与混响，但生成式重建可能改变音色。
 
-处理后的 WAV 会放到独立“增强音轨”，原素材不会被覆盖。源轨、AI 生成轨和增强轨各自支持
-Mute/Solo，可直接做 A/B 试听。工程保存后，增强文件与生成语音一样进入
-`.ttds.assets/generated`。
+处理成功后，结果会放到独立“增强音轨”并自动独奏，因此试听和按 `E` 导出都会立即使用
+处理后的声音。源轨、AI 生成轨和增强轨仍各自支持 Mute/Solo，可随时取消独奏做 A/B
+对比。点击增强结果后，“处理音频”菜单会出现“继续处理当前增强结果”，其输入是该结果
+当前非破坏裁边范围。只有整条处理链成功后才替换旧结果，失败或取消不会覆盖；替换可以
+撤销。原素材永不修改，增强文件保存于 `.ttds.assets/generated`。
 
 模型与 PyTorch 不包含在下载包中。软件会自动检测：
 

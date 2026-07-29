@@ -172,7 +172,7 @@ class ContextActionBar(QFrame):
     transcribe_requested = Signal()
     generate_requested = Signal()
     export_requested = Signal()
-    process_requested = Signal(str)
+    process_requested = Signal(str, str)
     delete_requested = Signal()
     edit_requested = Signal()
     locate_source_requested = Signal()
@@ -213,15 +213,36 @@ class ContextActionBar(QFrame):
             QToolButton.ToolButtonPopupMode.InstantPopup
         )
         process_menu = QMenu(self.process_button)
-        for text, engine in (
-            ("快速降噪 · DPDFNet", "dpdfnet"),
-            ("去除 BGM · BS-RoFormer", "separator"),
+        process_menu.addSection("处理所选源片段")
+        for text, process_id in (
+            ("一键去 BGM → 降噪（推荐）", "separator+dpdfnet"),
+            ("仅快速降噪 · DPDFNet", "dpdfnet"),
+            ("仅去除 BGM · BS-RoFormer", "separator"),
             ("录音室修复（实验）· StuPASE", "stupase"),
         ):
             action = process_menu.addAction(text)
             action.triggered.connect(
-                lambda _checked=False, value=engine: self.process_requested.emit(value)
+                lambda _checked=False, value=process_id: (
+                    self.process_requested.emit(value, "source")
+                )
             )
+        self._focused_process_separator = process_menu.addSeparator()
+        self._focused_process_section = process_menu.addSection(
+            "继续处理当前增强结果"
+        )
+        self._focused_process_actions = []
+        for text, process_id in (
+            ("继续快速降噪 · DPDFNet", "dpdfnet"),
+            ("继续去除 BGM · BS-RoFormer", "separator"),
+            ("继续录音室修复 · StuPASE", "stupase"),
+        ):
+            action = process_menu.addAction(text)
+            action.triggered.connect(
+                lambda _checked=False, value=process_id: (
+                    self.process_requested.emit(value, "focused")
+                )
+            )
+            self._focused_process_actions.append(action)
         self.process_button.setMenu(process_menu)
         self.locate_button = self._button(
             "定位源片段",
@@ -270,38 +291,66 @@ class ContextActionBar(QFrame):
 
     def _refresh(self) -> None:
         has_source = self._kind in {"region", "cue"}
-        has_generated_focus = self._focus_kind == "generated"
+        has_generated_focus = self._focus_kind in {"generated", "enhancement"}
+        has_enhancement_focus = self._focus_kind == "enhancement"
         visible = has_source or has_generated_focus
         self.setVisible(visible)
+        for action in (
+            self._focused_process_separator,
+            self._focused_process_section,
+            *self._focused_process_actions,
+        ):
+            action.setVisible(has_enhancement_focus)
         if not visible:
             return
 
         if has_source:
             self.summary.setText(self._summary)
-            self.detail.setText(
-                f"已聚焦 {self._focus_summary}；处理和导出仍作用于源片段"
-                if has_generated_focus
-                else "接下来可直接识别、生成、处理或导出"
-            )
+            if has_enhancement_focus:
+                self.detail.setText(
+                    f"已聚焦 {self._focus_summary}；可处理源片段，"
+                    "也可继续处理当前结果"
+                )
+            elif has_generated_focus:
+                self.detail.setText(
+                    f"已聚焦 {self._focus_summary}；处理和导出仍作用于源片段"
+                )
+            else:
+                self.detail.setText("接下来可直接识别、生成、处理或导出")
         else:
             self.summary.setText(self._focus_summary)
-            self.detail.setText("这是生成/增强结果；定位源片段后可继续处理")
+            self.detail.setText(
+                "这是增强结果；可继续降噪、去 BGM 或修复"
+                if has_enhancement_focus
+                else "这是生成结果；定位源片段后可继续处理"
+            )
 
         unavailable_hint = "先点击字幕，或按 I / O 创建源片段"
-        available_hints = {
+        source_action_hints = {
             self.asr_button: "识别所选源片段并写入字幕轨",
             self.tts_button: "用所选源片段作为参考生成语音（G）",
-            self.process_button: "降噪、去 BGM 或修复所选源片段",
             self.export_button: (
                 "导出当前可听轨道：Mute 排除，Solo 优先，"
                 "多条可听轨道会混音（E）"
             ),
         }
-        for button, available_hint in available_hints.items():
+        for button, available_hint in source_action_hints.items():
             button.setVisible(True)
             button.setEnabled(has_source)
             button.setToolTip(
                 available_hint if has_source else unavailable_hint
+            )
+        self.process_button.setVisible(True)
+        self.process_button.setEnabled(has_source or has_enhancement_focus)
+        if has_enhancement_focus:
+            self.process_button.setToolTip(
+                "可重新处理所选源片段，或把当前增强结果继续送入下一步"
+            )
+        else:
+            self.process_button.setToolTip(
+                "一键去 BGM → 降噪，或单独运行一个处理步骤"
+                if has_source
+                else unavailable_hint
             )
 
         self.play_button.setEnabled(has_source or has_generated_focus)

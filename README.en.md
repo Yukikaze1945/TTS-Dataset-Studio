@@ -105,6 +105,8 @@ Run the optional local GPU smoke test with:
 
 Select one or more regions and open **Process audio** in the contextual action bar:
 
+- **Remove BGM → denoise (recommended)** runs BS-RoFormer first and feeds its
+  actual output into DPDFNet; intermediate files do not clutter the timeline.
 - **Quick denoise** uses the 48 kHz
   [DPDFNet](https://github.com/ceva-ip/DPDFNet)
   `dpdfnet8_48khz_hr` CPU/ONNX model.
@@ -114,12 +116,16 @@ Select one or more regions and open **Process audio** in the contextual action b
 - **Studio repair (experimental)** uses
   [StuPASE](https://github.com/cisco-open/pase) for combined noise and reverb repair.
 
-Results are added to a separate **Enhancement** track; source media is never overwritten.
-Source, generated, and enhancement tracks have independent Mute/Solo controls for A/B monitoring.
-The optional environments and model weights are not bundled. Configure them under Settings →
-AI Engines → Audio Processing, or use `DPDFNET_PYTHON`, `AUDIO_SEPARATOR_PYTHON`, and
-`STUPASE_HOME`. StuPASE is currently a 16 kHz generative model and can change speaker detail,
-so compare its result with the source before using it for training.
+Successful results are added to a separate **Enhancement** track and automatically soloed, so
+preview and `E` export immediately use the processed sound. Source, generated, and enhancement
+tracks retain independent Mute/Solo controls for A/B monitoring. Focusing an enhancement clip
+reveals **Continue processing current result**; it uses the clip's current non-destructive trim.
+The old result is replaced only after the complete chain succeeds, and the replacement is
+undoable. Source media is never overwritten. Optional environments and model weights are not
+bundled. Configure them under Settings → AI Engines → Audio Processing, or use
+`DPDFNET_PYTHON`, `AUDIO_SEPARATOR_PYTHON`, and `STUPASE_HOME`. StuPASE is currently a 16 kHz
+generative model and can change speaker detail, so compare its result with the source before using
+it for training.
 
 ## Development
 
