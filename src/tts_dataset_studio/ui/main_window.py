@@ -1301,6 +1301,8 @@ class MainWindow(QMainWindow):
         selected: bool = True,
     ) -> None:
         self._apply_region_selection(region_id, additive, selected)
+        if selected and not additive:
+            self._select_export_cue_for_current_range()
         self._update_selection_status()
 
     def _generated_clip_selected(
@@ -1440,22 +1442,34 @@ class MainWindow(QMainWindow):
         if asset:
             track_id = self.export_track_combo.currentData()
             asset.export_track_id = track_id
-            region = self._current_region() if self.selected_region_id else None
-            track = next(
-                (item for item in asset.subtitle_tracks if item.id == track_id),
-                None,
-            )
-            cue = (
-                track.cue_for_region(region.start_ms, region.end_ms)
-                if track and region
-                else None
-            )
-            self.selected_cue = (track.id, cue.id) if track and cue else None
-            self.timeline.selected_cue_ids = {cue.id} if cue else set()
-            self.timeline.selected_cue_id = cue.id if cue else None
-            self._show_cue_in_editor(cue)
-            self.timeline.update()
+            self._select_export_cue_for_current_range()
             self._mark_dirty()
+
+    def _select_export_cue_for_current_range(self) -> None:
+        """Show the cue from the export track at the user's current selection."""
+        asset = self.project.active_asset
+        if not asset:
+            self.selected_cue = None
+            self._show_cue_in_editor(None)
+            return
+
+        region = self._current_region() if self.selected_region_id else None
+        current_cue = self._current_cue()
+        if region is not None:
+            start_ms, end_ms = region.start_ms, region.end_ms
+        elif current_cue is not None:
+            start_ms, end_ms = current_cue.start_ms, current_cue.end_ms
+        else:
+            start_ms = max(0, self.player_widget.position)
+            end_ms = start_ms + 1
+
+        track = asset.export_track
+        cue = track.cue_for_region(start_ms, end_ms) if track else None
+        self.selected_cue = (track.id, cue.id) if track and cue else None
+        self.timeline.selected_cue_ids = {cue.id} if cue else set()
+        self.timeline.selected_cue_id = cue.id if cue else None
+        self._show_cue_in_editor(cue)
+        self.timeline.update()
 
     def _load_gain(self) -> None:
         asset = self.project.active_asset

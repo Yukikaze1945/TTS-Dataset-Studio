@@ -40,6 +40,41 @@ def test_parse_ass_dialogue(tmp_path: Path) -> None:
     assert track.cues[0].text == "中文\n日本語"
 
 
+def test_parse_ass_merges_parallel_bilingual_dialogue_rows(tmp_path: Path) -> None:
+    source = tmp_path / "episode.ass"
+    source.write_text(
+        "[Events]\n"
+        "Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\n"
+        "Dialogue: 0,0:00:01.00,0:00:02.50,Chinese,,0,0,0,,请多关照\n"
+        "Dialogue: 0,0:00:01.00,0:00:02.50,Japanese,,0,0,0,,よろしくお願いします\n"
+        "Dialogue: 0,0:00:03.00,0:00:04.00,Chinese,,0,0,0,,下一句\n",
+        encoding="utf-8",
+    )
+
+    track = parse_subtitle(source)
+
+    assert [(cue.start_ms, cue.end_ms, cue.text) for cue in track.cues] == [
+        (1000, 2500, "请多关照\nよろしくお願いします"),
+        (3000, 4000, "下一句"),
+    ]
+
+
+def test_parse_ass_deduplicates_identical_parallel_lines(tmp_path: Path) -> None:
+    source = tmp_path / "episode.ass"
+    source.write_text(
+        "[Events]\n"
+        "Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\n"
+        "Dialogue: 0,0:00:01.00,0:00:02.50,Top,,0,0,0,,同一句\n"
+        "Dialogue: 0,0:00:01.00,0:00:02.50,Bottom,,0,0,0,,同一句\n",
+        encoding="utf-8",
+    )
+
+    track = parse_subtitle(source)
+
+    assert len(track.cues) == 1
+    assert track.cues[0].text == "同一句"
+
+
 def test_find_matching_subtitles_respects_stem_boundary(tmp_path: Path) -> None:
     media = tmp_path / "episode.mp4"
     media.touch()

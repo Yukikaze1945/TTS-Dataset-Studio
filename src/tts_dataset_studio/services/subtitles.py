@@ -112,7 +112,34 @@ def _parse_ass(content: str) -> list[SubtitleCue]:
         text = clean_subtitle_text(row.get("text", ""))
         if text and row.get("start") and row.get("end"):
             cues.append(SubtitleCue(_clock_to_ms(row["start"]), _clock_to_ms(row["end"]), text))
-    return cues
+    return merge_parallel_subtitle_cues(cues)
+
+
+def merge_parallel_subtitle_cues(cues: list[SubtitleCue]) -> list[SubtitleCue]:
+    """Merge flattened subtitle rows that represent parallel bilingual lines.
+
+    Bilingual ASS files commonly store translations either in one Dialogue row
+    separated by ``\\N`` or as consecutive Dialogue rows with identical timing
+    and different styles. Styles are intentionally not retained by the V1
+    subtitle model, so keeping the latter as overlapping cues makes one language
+    impossible to reach reliably from the timeline. Merge only exact timing
+    matches to avoid combining ordinary, partially overlapping dialogue.
+    """
+    merged: list[SubtitleCue] = []
+    by_timing: dict[tuple[int, int], SubtitleCue] = {}
+    for cue in cues:
+        key = (cue.start_ms, cue.end_ms)
+        existing = by_timing.get(key)
+        if existing is None:
+            by_timing[key] = cue
+            merged.append(cue)
+            continue
+        existing_lines = existing.text.splitlines()
+        for line in cue.text.splitlines():
+            if line not in existing_lines:
+                existing_lines.append(line)
+        existing.text = "\n".join(existing_lines)
+    return merged
 
 
 def parse_subtitle(path: Path) -> SubtitleTrack:

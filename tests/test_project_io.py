@@ -1,3 +1,4 @@
+import json
 from pathlib import Path
 
 from tts_dataset_studio.domain.models import (
@@ -52,6 +53,53 @@ def test_loading_autosave_preserves_real_project_path(tmp_path: Path) -> None:
 
     assert restored.project_path == str(original)
     assert not restored.project_path.endswith(".autosave")
+
+
+def test_loading_project_merges_legacy_parallel_bilingual_cues(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "legacy.ttds"
+    source.write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "assets": [
+                    {
+                        "path": str(tmp_path / "missing.mp4"),
+                        "display_name": "missing.mp4",
+                        "subtitle_tracks": [
+                            {
+                                "name": "双语",
+                                "source_path": str(tmp_path / "episode.ass"),
+                                "cues": [
+                                    {
+                                        "start_ms": 1000,
+                                        "end_ms": 2500,
+                                        "text": "请多关照",
+                                    },
+                                    {
+                                        "start_ms": 1000,
+                                        "end_ms": 2500,
+                                        "text": "よろしくお願いします",
+                                    },
+                                ],
+                            }
+                        ],
+                    }
+                ],
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+
+    restored = load_project(source)
+
+    assert len(restored.assets[0].subtitle_tracks[0].cues) == 1
+    assert (
+        restored.assets[0].subtitle_tracks[0].cues[0].text
+        == "请多关照\nよろしくお願いします"
+    )
 
 
 def test_generated_audio_is_copied_beside_project_and_round_trips(

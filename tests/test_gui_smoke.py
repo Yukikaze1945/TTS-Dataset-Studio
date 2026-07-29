@@ -197,6 +197,63 @@ def test_switching_export_track_refreshes_selected_region_text(qtbot) -> None:
     window.dirty = False
 
 
+def test_selecting_region_refreshes_text_from_export_track(qtbot) -> None:
+    window = MainWindow()
+    qtbot.addWidget(window)
+    stale_cue = SubtitleCue(1000, 2400, "旧的中文字幕")
+    selected_cue = SubtitleCue(3000, 4400, "選択した日本語字幕")
+    zh_track = SubtitleTrack("中文", cues=[stale_cue])
+    ja_track = SubtitleTrack("日文", cues=[selected_cue])
+    region = ExportRegion(3000, 4400)
+    asset = MediaAsset(
+        "missing.wav",
+        "missing.wav",
+        duration_ms=5000,
+        subtitle_tracks=[zh_track, ja_track],
+        export_track_id=ja_track.id,
+        regions=[region],
+    )
+    window.project = Project(assets=[asset], active_asset_id=asset.id)
+    window.timeline.set_asset(asset)
+    window._refresh_export_tracks()
+    window.selected_cue = (zh_track.id, stale_cue.id)
+    window._show_cue_in_editor(stale_cue)
+
+    window._region_selected(region.id)
+
+    assert window.cue_text.toPlainText() == selected_cue.text
+    assert window.selected_cue == (ja_track.id, selected_cue.id)
+    assert window.timeline.selected_cue_ids == {selected_cue.id}
+    window.dirty = False
+
+
+def test_switching_export_track_uses_selected_cue_without_region(qtbot) -> None:
+    window = MainWindow()
+    qtbot.addWidget(window)
+    chinese = SubtitleCue(1000, 2400, "请多关照")
+    japanese = SubtitleCue(1100, 2500, "よろしくお願いします")
+    zh_track = SubtitleTrack("中文", cues=[chinese])
+    ja_track = SubtitleTrack("日文", cues=[japanese])
+    asset = MediaAsset(
+        "missing.wav",
+        "missing.wav",
+        duration_ms=5000,
+        subtitle_tracks=[zh_track, ja_track],
+        export_track_id=zh_track.id,
+    )
+    window.project = Project(assets=[asset], active_asset_id=asset.id)
+    window.timeline.set_asset(asset)
+    window._refresh_export_tracks()
+    window.selected_cue = (zh_track.id, chinese.id)
+    window._show_cue_in_editor(chinese)
+
+    window.export_track_combo.setCurrentIndex(1)
+
+    assert window.cue_text.toPlainText() == japanese.text
+    assert window.selected_cue == (ja_track.id, japanese.id)
+    window.dirty = False
+
+
 def test_preview_preserves_bilingual_subtitle_lines(qtbot) -> None:
     window = MainWindow()
     qtbot.addWidget(window)

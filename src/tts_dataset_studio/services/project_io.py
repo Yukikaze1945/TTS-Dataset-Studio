@@ -16,6 +16,7 @@ from tts_dataset_studio.domain.models import (
     SubtitleCue,
     SubtitleTrack,
 )
+from tts_dataset_studio.services.subtitles import merge_parallel_subtitle_cues
 
 T = TypeVar("T")
 
@@ -160,10 +161,13 @@ def load_project(source: Path) -> Project:
             raw_track = dict(raw_track)
             if raw_track.get("source_path"):
                 raw_track["source_path"] = _restore_path(raw_track["source_path"], source.parent)
-            raw_track["cues"] = [
+            cues = [
                 SubtitleCue(**_filtered(SubtitleCue, cue))
                 for cue in raw_track.get("cues", [])
             ]
+            if Path(raw_track.get("source_path", "")).suffix.casefold() == ".ass":
+                cues = merge_parallel_subtitle_cues(cues)
+            raw_track["cues"] = cues
             tracks.append(SubtitleTrack(**_filtered(SubtitleTrack, raw_track)))
         raw_asset["subtitle_tracks"] = tracks
         raw_asset["regions"] = [
