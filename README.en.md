@@ -61,7 +61,7 @@ uv run tts-dataset-studio
 | Space | Play/pause |
 | I / O | Set in/out points |
 | Enter | Play the current subtitle or region |
-| E | Export with the active preset |
+| E | Export audible tracks with the active preset (respects Mute/Solo) |
 | X | Delete selected export regions |
 | D / F | Previous/next video frame |
 | C | Save a clean source-video still |

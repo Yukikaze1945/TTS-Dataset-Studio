@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 import shutil
 import subprocess
 from pathlib import Path
@@ -72,6 +73,93 @@ def test_probe_and_export_real_audio(tmp_path: Path) -> None:
     assert stream["sample_rate"] == "24000"
     assert stream["channels"] == 1
     assert stream["codec_name"] == "pcm_s16le"
+
+
+def test_export_real_audio_follows_enhancement_solo_state(
+    tmp_path: Path,
+) -> None:
+    ffmpeg = shutil.which("ffmpeg") or "ffmpeg"
+    source = tmp_path / "silent-source.wav"
+    enhanced = tmp_path / "enhanced.wav"
+    subprocess.run(
+        [
+            ffmpeg,
+            "-v",
+            "error",
+            "-f",
+            "lavfi",
+            "-i",
+            "anullsrc=r=48000:cl=mono",
+            "-t",
+            "1.2",
+            str(source),
+        ],
+        check=True,
+    )
+    subprocess.run(
+        [
+            ffmpeg,
+            "-v",
+            "error",
+            "-f",
+            "lavfi",
+            "-i",
+            "sine=frequency=880:duration=1.2",
+            "-ar",
+            "48000",
+            str(enhanced),
+        ],
+        check=True,
+    )
+    asset = probe_media(source)
+    track = asset.enhancement_track
+    track.muted = False
+    track.solo = True
+    track.clips.append(
+        GeneratedAudioClip(
+            path=str(enhanced),
+            start_ms=0,
+            source_offset_ms=0,
+            duration_ms=1200,
+            source_duration_ms=1200,
+            reference_region_id="region",
+            text="enhanced",
+            engine="separator",
+        )
+    )
+    preset = ExportPreset(
+        output_dir=str(tmp_path / "dataset"),
+        write_txt=False,
+        peak_normalize=True,
+    )
+
+    result = export_region(
+        asset,
+        ExportRegion(100, 900),
+        preset,
+        1,
+        Event(),
+    )
+
+    detected = subprocess.run(
+        [
+            ffmpeg,
+            "-hide_banner",
+            "-i",
+            str(result.audio_path),
+            "-af",
+            "volumedetect",
+            "-f",
+            "null",
+            "-",
+        ],
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    match = re.search(r"max_volume:\s*(-?[\d.]+)\s*dB", detected.stderr)
+    assert match
+    assert float(match.group(1)) == pytest.approx(-1.0, abs=0.2)
 
 
 def test_probe_imports_editable_embedded_subtitle_track(tmp_path: Path) -> None:
@@ -165,5 +253,24 @@ def test_build_ai_monitor_cache_places_generated_clip_on_timeline(
         text=True,
         check=True,
     )
-    duration = float(json.loads(probe.stdout)["format"]["duration"])
+    payload = json.loads(probe.stdout)
+    duration = float(payload["format"]["duration"])
     assert duration == pytest.approx(1.2, abs=0.05)
+    stream_probe = subprocess.run(
+        [
+            shutil.which("ffprobe") or "ffprobe",
+            "-v",
+            "error",
+            "-show_entries",
+            "stream=sample_rate,channels",
+            "-of",
+            "json",
+            str(output),
+        ],
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    stream = json.loads(stream_probe.stdout)["streams"][0]
+    assert stream["sample_rate"] == "48000"
+    assert stream["channels"] == 2

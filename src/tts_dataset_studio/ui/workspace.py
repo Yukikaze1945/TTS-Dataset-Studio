@@ -198,6 +198,9 @@ class ContextActionBar(QFrame):
         self.process_button.setMenu(process_menu)
         self.delete_button = self._button("删除", "X", self.delete_requested)
         self.export_button = self._button("导出", "E", self.export_requested, primary=True)
+        self.export_button.setToolTip(
+            "导出当前可听轨道：Mute 排除，Solo 优先，多条可听轨道会混音"
+        )
         self.asr_button.setObjectName("secondaryAction")
         self.tts_button.setObjectName("secondaryAction")
         self.delete_button.setObjectName("destructiveAction")

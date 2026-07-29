@@ -71,7 +71,10 @@ from tts_dataset_studio.domain.models import (
     SubtitleTrack,
     new_id,
 )
-from tts_dataset_studio.services.ai_monitor import build_ai_monitor_cache
+from tts_dataset_studio.services.ai_monitor import (
+    audible_audio_tracks,
+    build_ai_monitor_cache,
+)
 from tts_dataset_studio.services.asr_audio import extract_asr_audio
 from tts_dataset_studio.services.asr_controller import AsrController
 from tts_dataset_studio.services.audio_enhancement import (
@@ -1269,16 +1272,8 @@ class MainWindow(QMainWindow):
         if not asset:
             self.player_widget.set_track_monitor(True, False)
             return
-        any_solo = asset.source_solo or any(
-            track.solo for track in asset.generated_audio_tracks
-        )
-        source_audible = not asset.source_muted and (
-            not any_solo or asset.source_solo
-        )
-        ai_audible = any(
-            not track.muted and (not any_solo or track.solo)
-            for track in asset.generated_audio_tracks
-        )
+        source_audible, generated_tracks = audible_audio_tracks(asset)
+        ai_audible = bool(generated_tracks)
         self.player_widget.set_track_monitor(source_audible, ai_audible)
         if hasattr(self, "waveform_db_scale"):
             self.waveform_db_scale.update()
@@ -2018,7 +2013,8 @@ class MainWindow(QMainWindow):
             "按 I 后时间轴会显示青色 IN 标记线；\n"
             "向下拖动波形轨底边，展开后显示 dBFS 标尺与参考线；\n"
             "监看区可在“视频 / 波形”之间切换；\n"
-            "增益会实时改变时间线波形，红色部分表示预计削波。",
+            "增益会实时改变时间线波形，红色部分表示预计削波；\n"
+            "试听和导出都遵循轨道 Mute / Solo：Solo 优先，多条可听轨道会混音。",
         )
 
     def _toggle_asr_model(self) -> None:
@@ -2950,8 +2946,13 @@ class MainWindow(QMainWindow):
         self.export_worker.completed.connect(self._export_completed)
         self.export_worker.failed.connect(self._export_failed)
         self.export_worker.start()
-        self.task_notice.start("正在导出音频…")
-        self.status_message.setText("正在导出")
+        source_audible, generated_tracks = audible_audio_tracks(asset)
+        audible_names = (["Source"] if source_audible else []) + [
+            track.name for track in generated_tracks
+        ]
+        route = " + ".join(audible_names) or "无可听轨道"
+        self.task_notice.start(f"正在导出：{route}…")
+        self.status_message.setText(f"正在导出 · {route}")
 
     def _export_completed(self, result: ExportResult) -> None:
         self.cancel_export_button.setEnabled(False)

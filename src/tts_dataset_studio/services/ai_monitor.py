@@ -3,19 +3,31 @@ from __future__ import annotations
 import subprocess
 from pathlib import Path
 
-from tts_dataset_studio.domain.models import MediaAsset
+from tts_dataset_studio.domain.models import GeneratedAudioTrack, MediaAsset
 from tts_dataset_studio.services.media import ToolPaths
 
 
-def audible_generated_tracks(asset: MediaAsset):
+def audible_audio_tracks(
+    asset: MediaAsset,
+) -> tuple[bool, list[GeneratedAudioTrack]]:
     any_solo = asset.source_solo or any(
         track.solo for track in asset.generated_audio_tracks
     )
-    return [
+    source_audible = (
+        asset.has_audio
+        and not asset.source_muted
+        and (not any_solo or asset.source_solo)
+    )
+    generated = [
         track
         for track in asset.generated_audio_tracks
         if not track.muted and (not any_solo or track.solo)
     ]
+    return source_audible, generated
+
+
+def audible_generated_tracks(asset: MediaAsset) -> list[GeneratedAudioTrack]:
+    return audible_audio_tracks(asset)[1]
 
 
 def build_ai_monitor_cache(
@@ -45,7 +57,7 @@ def build_ai_monitor_cache(
         "-f",
         "lavfi",
         "-i",
-        "anullsrc=r=22050:cl=mono",
+        "anullsrc=r=48000:cl=stereo",
     ]
     for clip in clips:
         command.extend(["-i", clip.path])
@@ -61,6 +73,9 @@ def build_ai_monitor_cache(
             f"atrim=start={clip.source_offset_ms / 1000:.6f}:"
             f"duration={clip.duration_ms / 1000:.6f},"
             "asetpts=PTS-STARTPTS,"
+            "aresample=48000,"
+            "aformat=sample_fmts=fltp:sample_rates=48000:"
+            "channel_layouts=stereo,"
             f"adelay={clip.start_ms}:all=1[{label}]"
         )
         labels.append(f"[{label}]")

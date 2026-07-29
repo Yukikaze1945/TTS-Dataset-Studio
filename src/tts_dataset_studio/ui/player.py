@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import time
 from pathlib import Path
 
 from PySide6.QtCore import Qt, QUrl, Signal
@@ -71,6 +72,7 @@ class PlayerWidget(QStackedWidget):
         self._source_audible = True
         self._ai_audible = False
         self._ai_monitor_path: Path | None = None
+        self._last_ai_resync_at = 0.0
 
         self.mpv: MpvBackend | None = None
         self._using_mpv = False
@@ -138,12 +140,15 @@ class PlayerWidget(QStackedWidget):
 
     def _mpv_position_changed(self, milliseconds: int) -> None:
         self.position_changed.emit(milliseconds)
+        now = time.monotonic()
         if (
             self._ai_audible
             and self._ai_monitor_path
-            and abs(self.ai_player.position() - milliseconds) > 80
+            and abs(self.ai_player.position() - milliseconds) > 500
+            and now - self._last_ai_resync_at >= 2.0
         ):
             self.ai_player.setPosition(milliseconds)
+            self._last_ai_resync_at = now
         if self._range_end_ms is not None and milliseconds >= self._range_end_ms:
             if self.mpv:
                 self.mpv.set_paused(True)
@@ -158,6 +163,7 @@ class PlayerWidget(QStackedWidget):
             self.ai_player.pause()
         else:
             self.ai_player.setPosition(self.position)
+            self._last_ai_resync_at = time.monotonic()
             self.ai_player.play()
 
     def load(self, path: Path, has_video: bool) -> None:
@@ -245,6 +251,7 @@ class PlayerWidget(QStackedWidget):
             self.qt_player.setPosition(milliseconds)
         if self._ai_monitor_path:
             self.ai_player.setPosition(milliseconds)
+            self._last_ai_resync_at = time.monotonic()
 
     def scrub(self, milliseconds: int) -> None:
         if self._using_mpv and self.mpv:
@@ -254,6 +261,7 @@ class PlayerWidget(QStackedWidget):
         if self._ai_monitor_path:
             self.ai_player.pause()
             self.ai_player.setPosition(milliseconds)
+            self._last_ai_resync_at = time.monotonic()
 
     def finish_scrub(self, milliseconds: int) -> None:
         if self._using_mpv and self.mpv:
@@ -262,6 +270,7 @@ class PlayerWidget(QStackedWidget):
             self.qt_player.setPosition(milliseconds)
         if self._ai_monitor_path:
             self.ai_player.setPosition(milliseconds)
+            self._last_ai_resync_at = time.monotonic()
 
     def set_scrub_hz(self, frequency: int) -> None:
         if self.mpv:
@@ -318,6 +327,7 @@ class PlayerWidget(QStackedWidget):
         self._ai_monitor_path = path
         self.ai_player.setSource(QUrl.fromLocalFile(str(path)))
         self.ai_player.setPosition(self.position)
+        self._last_ai_resync_at = time.monotonic()
         if self._ai_audible:
             paused = self.mpv.paused if self._using_mpv and self.mpv else (
                 self.qt_player.playbackState()
@@ -343,6 +353,7 @@ class PlayerWidget(QStackedWidget):
             self.ai_player.pause()
         elif self._ai_monitor_path:
             self.ai_player.setPosition(self.position)
+            self._last_ai_resync_at = time.monotonic()
             paused = self.mpv.paused if self._using_mpv and self.mpv else (
                 self.qt_player.playbackState()
                 != QMediaPlayer.PlaybackState.PlayingState
