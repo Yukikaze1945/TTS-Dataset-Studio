@@ -12,7 +12,11 @@ from tts_dataset_studio.domain.models import (
     SubtitleTrack,
 )
 from tts_dataset_studio.services.media import ToolPaths
-from tts_dataset_studio.ui.main_window import MainWindow, TtsBatchItem
+from tts_dataset_studio.ui.main_window import (
+    EnhancementBatchItem,
+    MainWindow,
+    TtsBatchItem,
+)
 
 
 def test_main_window_builds(qtbot) -> None:
@@ -485,6 +489,41 @@ def test_tts_completion_keeps_source_actions_available(
     assert window.context_bar.export_button.isEnabled()
     assert "仍作用于源片段" in window.context_bar.detail.text()
     window._tts_busy = False
+    window.dirty = False
+
+
+def test_enhancement_completion_keeps_source_actions_available(
+    qtbot,
+    tmp_path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    window = MainWindow()
+    qtbot.addWidget(window)
+    region = ExportRegion(500, 1500)
+    asset = MediaAsset(
+        "missing.wav",
+        "missing.wav",
+        duration_ms=3000,
+        regions=[region],
+    )
+    window.project = Project(assets=[asset], active_asset_id=asset.id)
+    window.timeline.set_asset(asset)
+    window._apply_region_selection(region.id, False, True)
+    window._enhancement_asset_id = asset.id
+    window._enhancement_engine = "dpdfnet"
+    output = tmp_path / "enhanced.wav"
+    output.write_bytes(b"enhanced")
+    item = EnhancementBatchItem(region=region, text="处理文本")
+    monkeypatch.setattr(window, "_schedule_generated_waveform", lambda _clip: None)
+    monkeypatch.setattr(window, "_schedule_ai_monitor", lambda: None)
+
+    window._audio_enhancement_item_completed((item, output))
+
+    assert window.selected_region_ids == {region.id}
+    assert window.selected_generated_clip_ids == {item.clip_id}
+    assert window.context_bar.process_button.isEnabled()
+    assert window.context_bar.export_button.isEnabled()
+    assert "仍作用于源片段" in window.context_bar.detail.text()
     window.dirty = False
 
 
